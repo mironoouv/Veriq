@@ -56,3 +56,16 @@ No generic remote shell; no arbitrary file fetch by URL; media tokens publish/su
 
 ## Storage
 `GET /admin/storage/summary`, `/admin/backups`, `/admin/storage/cleanup-candidates`, `POST /admin/storage/cleanup-dry-run`, `POST /admin/storage/cleanup-jobs` with step-up and approval, `GET /admin/storage/cleanup-jobs/{id}`; never arbitrary filesystem paths accepted from client.
+
+
+## Auth Slice 2 — маршруты тестового стенда
+
+| Метод и путь относительно `/api/v1` | JSON | Успех |
+|---|---|---|
+| POST `/auth/register` | `email`, `password` | `202` без тела, в том числе для существующего адреса |
+| POST `/auth/resend-verification` | `email` | `202` без тела для любого корректного адреса |
+| POST `/auth/verify-email` | `email`, `proof`, `password` | `204`, без cookie |
+
+Пароль в последнем запросе становится паролем подтверждённого аккаунта. Неизвестный, истёкший, повторно использованный или привязанный к другому адресу proof возвращает один и тот же `400 INVALID_PROOF`. Невалидный JSON и поля вне контракта дают `400 INVALID_REQUEST`, недопустимый пароль — `400 PASSWORD_REJECTED`. Превышение квоты даёт `429` с `Retry-After`, недоступность лимитера или БД — `503`. Ответы Auth используют `Cache-Control: no-store`, а ошибки содержат серверный request ID. Лимиты тестового стенда на 300 секунд — 30 попыток на IP и 10 на адрес для регистрации и проверки, 30 на IP и 3 на адрес для повтора. Категории независимы. Resend сохраняет действующую ссылку. Новое письмо можно получить после истечения предыдущего proof.
+
+GET `/auth/verify-email` показывает изолированную форму и не меняет состояние. Proof находится во фрагменте ссылки, удаляется из адресной строки при загрузке и отправляется только в JSON через POST. Обработчик исключён из OpenAPI. Маршруты регистрируются только при `VERIQ_ENV=test` и `VERIQ_ENABLE_TEST_REGISTRATION=1`.

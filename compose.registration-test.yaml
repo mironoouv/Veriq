@@ -1,0 +1,24 @@
+# Explicit local test environment. Combine with compose.yaml only.
+services:
+  api:
+    environment:
+      VERIQ_ENV: test
+      VERIQ_ENABLE_TEST_REGISTRATION: "1"
+      VERIQ_TEST_MAIL_KEY: ${VERIQ_TEST_MAIL_KEY:?Generate a dedicated Fernet key for testing}
+      VERIQ_TEST_AUTH_HMAC_KEY: ${VERIQ_TEST_AUTH_HMAC_KEY:?Generate a dedicated 32-byte hex key for testing}
+      VERIQ_TEST_PASSWORD_BLOCKLIST: /run/veriq/password-blocklist.sha256
+    ports:
+      - "127.0.0.1:${VERIQ_TEST_AUTH_PORT:-18000}:8000"
+    volumes:
+      - type: bind
+        source: ${VERIQ_TEST_PASSWORD_BLOCKLIST:?Set the path to the test password blocklist}
+        target: /run/veriq/password-blocklist.sha256
+        read_only: true
+  worker:
+    environment:
+      VERIQ_ENV: test
+      VERIQ_ENABLE_TEST_REGISTRATION: "1"
+      VERIQ_TEST_MAIL_KEY: ${VERIQ_TEST_MAIL_KEY:?Generate a dedicated Fernet key for testing}
+      VERIQ_TEST_MAILBOX: /run/veriq/mailbox
+    tmpfs:
+      - /run/veriq/mailbox:uid=10001,gid=10001,mode=0700
