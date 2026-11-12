@@ -13,6 +13,8 @@ class AuthEvent(StrEnum):
     MFA = "mfa_attempt"
     PASSWORD_RESET = "password_reset_attempt"
     MFA_RECOVERY = "mfa_recovery_attempt"
+    PASSWORD_CHANGED = "password_changed"
+    PASSWORD_RESET_COMPLETED = "password_reset"
     PASSWORD_VERIFIED = "password_verified"
     LOGIN_MFA_REQUIRED = "login_mfa_required"
     SESSION_ROTATED = "session_rotated"

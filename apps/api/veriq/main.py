@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
+from cryptography.fernet import Fernet
 from fastapi import FastAPI, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -17,8 +18,10 @@ from veriq.browser_login import browser_router, login_enabled
 from veriq.database import create_database_engine, database_url
 from veriq.mfa import Mfa
 from veriq.mfa_crypto import FactorKeys
+from veriq.password_recovery import PasswordRecovery, recovery_enabled
 from veriq.redis_client import create_redis, ping_redis
 from veriq.registration import registration_enabled, registration_router
+from veriq.registration_policy import PasswordPolicy
 from veriq.sessions import Sessions
 
 
@@ -142,6 +145,17 @@ def create_app(
         app.include_router(registration_router(database, cache))
 
     if cache is not None and login_engines is not None:
-        app.include_router(browser_router(database, cache, *login_engines, mfa=mfa))
+        recovery = None
+        if recovery_enabled():
+            recovery = PasswordRecovery(
+                database,
+                login_engines[0],
+                Sessions(database).policy,
+                PasswordPolicy(Path(os.environ["VERIQ_TEST_PASSWORD_BLOCKLIST"])),
+                Fernet(os.environ["VERIQ_TEST_MAIL_KEY"].encode("ascii")),
+            )
+        app.include_router(
+            browser_router(database, cache, *login_engines, mfa=mfa, recovery=recovery)
+        )
 
     return app

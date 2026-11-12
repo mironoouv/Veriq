@@ -5,7 +5,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from uuid import UUID
+from typing import Literal
+from uuid import UUID, uuid4
 
 from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import Engine, text
@@ -15,13 +16,20 @@ from sqlalchemy import Engine, text
 class VerificationMail:
     email: str = field(repr=False)
     proof: str = field(repr=False)
+    purpose: Literal["verify_email", "password_reset"] = "verify_email"
 
     def seal(self, cipher: Fernet) -> bytes:
-        return cipher.encrypt(json.dumps([self.email, self.proof]).encode())
+        return cipher.encrypt(
+            json.dumps([self.email, self.proof, self.purpose]).encode()
+        )
 
     @classmethod
     def open(cls, cipher: Fernet, envelope: bytes) -> "VerificationMail":
-        email, proof = json.loads(cipher.decrypt(envelope, ttl=1800))
+        email, proof, *kind = json.loads(cipher.decrypt(envelope, ttl=1800))
+        if kind == ["password_reset"]:
+            return cls(email, proof, "password_reset")
+        if kind not in ([], ["verify_email"]):
+            raise InvalidToken
         return cls(email, proof)
 
 
@@ -30,8 +38,24 @@ class LocalMailbox:
     directory: Path
 
     def send(self, proof_id: UUID, message: VerificationMail) -> None:
-        # A proof ID is the delivery idempotency key, even across worker restarts.
-        destination = self.directory / f"{proof_id}.json"
+        route = (
+            "password-reset/confirm"
+            if message.purpose == "password_reset"
+            else "verify-email"
+        )
+        self._deliver(
+            proof_id,
+            {
+                "recipient": message.email,
+                "path": f"/api/v1/auth/{route}#{message.proof}",
+            },
+        )
+
+    def send_password_notice(self, event_id: UUID, email: str, event_type: str) -> None:
+        self._deliver(event_id, {"recipient": email, "event": event_type})
+
+    def _deliver(self, delivery_id: UUID, payload: dict[str, str]) -> None:
+        destination = self.directory / f"{delivery_id}.json"
         if destination.exists():
             return
         with NamedTemporaryFile(
@@ -39,13 +63,7 @@ class LocalMailbox:
         ) as output:
             pending = Path(output.name)
             try:
-                json.dump(
-                    {
-                        "recipient": message.email,
-                        "path": f"/api/v1/auth/verify-email#{message.proof}",
-                    },
-                    output,
-                )
+                json.dump(payload, output)
                 output.flush()
                 os.fsync(output.fileno())
                 output.close()
@@ -74,3 +92,24 @@ def deliver_verification(engine: Engine, cipher: Fernet, mailbox: LocalMailbox) 
             {"id": proof_id, "delivered": delivered},
         )
     return delivered
+
+
+def deliver_password_notice(engine: Engine, mailbox: LocalMailbox) -> bool:
+    claim = uuid4()
+    with engine.begin() as connection:
+        row = connection.execute(
+            text("SELECT * FROM public.veriq_password_notice_claim(:claim)"),
+            {"claim": claim},
+        ).one_or_none()
+        if row is None:
+            return False
+        try:
+            mailbox.send_password_notice(row.event_id, row.email, row.event_type)
+        except OSError:
+            return False
+        return bool(
+            connection.execute(
+                text("SELECT public.veriq_auth_ack_notice(:event,:claim)"),
+                {"event": row.event_id, "claim": claim},
+            ).scalar_one()
+        )

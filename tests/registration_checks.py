@@ -703,10 +703,38 @@ def mfa_http(
     assert status == 200
     csrf = json.loads(body)["csrf_token"]
     if seed is None:
+        assert call("/auth/password-reset/request", {"email": email})[0] == 503
         assert call("/auth/mfa/challenge", {"code": "invalid"})[0] == 503
         print("MFA HTTP fails closed during Redis outage.")
         return
 
+    assert (
+        call(
+            "/auth/password-reset/request",
+            {"email": email},
+            site="https://other.example.invalid",
+        )[0]
+        == 403
+    )
+    assert call("/auth/password-reset/request", {"email": email}) == (202, b"")
+    assert call(
+        "/auth/password-reset/request", {"email": "unknown-reset-http@example.invalid"}
+    ) == (202, b"")
+    status, page = call("/auth/password-reset/confirm")
+    assert status == 200 and b"history.replaceState" in page
+    assert (
+        query(
+            owner,
+            "SELECT count(*) FROM password_reset_proofs WHERE email_normalized=:email AND consumed_at IS NULL",
+            email=email,
+        )
+        == 1
+    )
+    query(
+        owner,
+        "DELETE FROM password_reset_proofs WHERE email_normalized=:email RETURNING id",
+        email=email,
+    )
     assert call("/auth/login", {"email": email, "password": FINAL})[0] == 202
     assert "__Host-veriq-session" not in cookies
     assert "__Host-veriq-mfa-challenge" in cookies
@@ -756,6 +784,7 @@ def configure_mfa(root: Path) -> FactorKeys:
         json.dumps({"active": "test", "keys": {"test": key.hex()}}), encoding="ascii"
     )
     os.environ["VERIQ_ENABLE_TEST_MFA"] = "1"
+    os.environ["VERIQ_ENABLE_TEST_PASSWORD_RECOVERY"] = "1"
     os.environ["VERIQ_TEST_MFA_KEYRING"] = str(ring)
     return FactorKeys("test", {"test": key})
 

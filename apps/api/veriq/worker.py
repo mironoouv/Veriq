@@ -17,9 +17,13 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from veriq.database import create_database_engine
 from veriq.jobs import WAKE_QUEUE, enqueue_probe, process_next
+from veriq.password_recovery import recovery_enabled
 from veriq.redis_client import create_redis
 from veriq.registration import registration_enabled
-from veriq.verification_mail import LocalMailbox, deliver_verification
+from veriq.verification_mail import (
+    LocalMailbox,
+    deliver_verification,
+)
 
 HEARTBEAT = Path("/tmp/veriq-worker-heartbeat")
 LOG = logging.getLogger(__name__)
@@ -48,7 +52,8 @@ async def main() -> int:
             return 0
 
         cipher = mailbox = None
-        if registration_enabled():
+        password_mail = recovery_enabled()
+        if registration_enabled() or password_mail:
             cipher = Fernet(os.environ["VERIQ_TEST_MAIL_KEY"].encode("ascii"))
             mailbox = LocalMailbox(Path(os.environ["VERIQ_TEST_MAILBOX"]))
 
