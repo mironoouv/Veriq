@@ -128,6 +128,28 @@ grant_epoch, role_id)` исключает дубликаты в текущей �
 - Tokens (`invites`, `enrollments`, `pairings`) stored only as hashes. Never reuse credential across organizations.
 - Automatically purge expired incident partitions/records according to policy; audit purge policy separate.
 
+### Slice C — ревизия `0006`
+
+`ENABLE` и `FORCE ROW LEVEL SECURITY` защищают `organizations`,
+`organization_memberships`, `organization_roles`, `organization_role_permissions`
+и `membership_roles`. Политика API использует одинаковое условие для
+`USING` и `WITH CHECK`: строка относится к текущей организации, а проверенный
+субъект имеет там активное членство. Пустой или неверный контекст не допускает строки.
+В этом срезе API получает SELECT. Тесты DML временно выдают дополнительные
+права только на одноразовой БД и проверяют политику под ролью API.
+
+| Роль БД | Назначение |
+|---|---|
+| `veriq_dev` | Локальный PostgreSQL bootstrap и миграции, отдельные учётные данные |
+| `veriq_api` | Чтение tenant-таблиц под RLS и вызов проверки членства |
+| `veriq_worker` | SELECT, INSERT, UPDATE очереди `background_jobs` |
+| `veriq_identity_lookup` | NOLOGIN, владелец только функции проверки членства, SELECT минимального набора identity-колонок |
+
+Ревизия не меняет существующие строки. Роли PostgreSQL общие для кластера.
+При откате удаляются политики и права в этой БД. Роли могут использоваться другими
+БД кластера и не удаляются. Параметры логина выдаёт процесс `migrate` после
+успешного Alembic upgrade, с отдельными паролями для API и worker.
+
 ## Migration sequence
 1. identity, membership, organization RBAC; 2. academic; 3. banks/questions; 4. publications/assignments; 5. attempts/answers/grading; 6. agent/proctoring; 7. judge; 8. audit and backup catalogs; 9. indexes, RLS hardening. All migrations tested fresh DB and upgrade from previous revision.
 

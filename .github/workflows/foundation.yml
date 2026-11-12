@@ -18,9 +18,11 @@ jobs:
           persist-credentials: false
       - name: Configure ephemeral database
         run: |
-          password="$(openssl rand -hex 32)"
-          echo "::add-mask::$password"
-          echo "VERIQ_DB_PASSWORD=$password" >> "$GITHUB_ENV"
+          for variable in VERIQ_DB_PASSWORD VERIQ_API_DB_PASSWORD VERIQ_WORKER_DB_PASSWORD; do
+            password="$(openssl rand -hex 32)"
+            echo "::add-mask::$password"
+            echo "$variable=$password" >> "$GITHUB_ENV"
+          done
       - name: Check Python sources and run API tests
         run: docker build --target checks apps/api
       - name: Build and start stack
