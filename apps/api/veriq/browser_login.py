@@ -27,6 +27,8 @@ from veriq.auth_rate_limit import (
     LimitBudget,
     trusted_client_ip,
 )
+from veriq.bulk_import import BulkImport
+from veriq.bulk_import_format import MAX_UPLOAD
 from veriq.mfa import Mfa, Purpose
 from veriq.mfa_recovery import MfaRecovery, RecoveryAction
 from veriq.organization_joining import JoinCommand, OrganizationJoining
@@ -905,5 +907,105 @@ def browser_router(
             except SQLAlchemyError:
                 return _error(context, "SERVICE_UNAVAILABLE", 503)
             return JSONResponse(data, headers=HEADERS)
+
+    if os.environ.get("VERIQ_ENABLE_TEST_BULK_IMPORT") == "1":
+        imports = BulkImport(engine)
+        upload_slots = asyncio.Semaphore(2)
+
+        @router.post("/organizations/{organization_id}/imports/{action}")
+        async def import_command(
+            organization_id: UUID, action: str, request: Request
+        ) -> Response:
+            context = RequestContext.new()
+            if not csrf_valid(request):
+                return _error(context, "CSRF_DENIED", 403)
+            if request.client is None:
+                return _error(context, "INVALID_REQUEST", 400)
+            try:
+                token = SessionToken(request.cookies.get(SESSION, ""))
+                gate = token._gate(imports.policy)
+                await limiter.check(
+                    AuthCategory.BULK_IMPORT,
+                    trusted_client_ip(request.client.host, None, ()),
+                    str(gate.session_id),
+                )
+                if action == "preview":
+                    if upload_slots.locked():
+                        return _error(context, "SERVICE_UNAVAILABLE", 503)
+                    kind = {
+                        "text/csv": "csv",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+                    }.get(
+                        request.headers.get("content-type", "").split(";", 1)[0].lower()
+                    )
+                    column = request.query_params.get("email_column", "email")
+                    if kind is None or len(column) > 64:
+                        return _error(context, "INVALID_IMPORT_FORMAT", 400)
+                    async with upload_slots:
+                        await asyncio.to_thread(
+                            imports.command,
+                            organization_id,
+                            token,
+                            "authorize",
+                            UUID(int=0),
+                        )
+                        payload = bytearray()
+                        async with asyncio.timeout(5):
+                            async for chunk in request.stream():
+                                if len(payload) + len(chunk) > MAX_UPLOAD:
+                                    return _error(context, "IMPORT_TOO_LARGE", 413)
+                                payload.extend(chunk)
+                        task = asyncio.create_task(
+                            asyncio.to_thread(
+                                imports.upload,
+                                organization_id,
+                                token,
+                                bytes(payload),
+                                kind,
+                                column,
+                            )
+                        )
+                        try:
+                            result = await asyncio.shield(task)
+                        except asyncio.CancelledError:
+                            await asyncio.gather(task, return_exceptions=True)
+                            raise
+                elif action in {"confirm", "result", "claim"}:
+                    data = await _payload(request)
+                    if not isinstance(data, dict) or set(data) != (
+                        {"batch_id", "version"} if action == "confirm" else {"batch_id"}
+                    ):
+                        raise ValueError("Invalid command fields")
+                    if not isinstance(data["batch_id"], str):
+                        raise ValueError("Invalid batch")
+                    version = None
+                    if action == "confirm":
+                        if (
+                            not isinstance(data["version"], str)
+                            or len(data["version"]) != 64
+                        ):
+                            raise ValueError("Invalid version")
+                        version = bytes.fromhex(data["version"])
+                    result = await asyncio.to_thread(
+                        imports.command,
+                        organization_id,
+                        token,
+                        action,
+                        UUID(data["batch_id"]),
+                        version,
+                    )
+                else:
+                    return _error(context, "IMPORT_DENIED", 404)
+            except AuthLimitRejected as error:
+                response = error.response(context)
+                response.headers.update(HEADERS)
+                return response
+            except (ValueError, RecursionError, TimeoutError):
+                return _error(context, "INVALID_IMPORT", 400)
+            except AccessDenied:
+                return _error(context, "IMPORT_DENIED", 404)
+            except SQLAlchemyError:
+                return _error(context, "SERVICE_UNAVAILABLE", 503)
+            return JSONResponse(result, headers=HEADERS)
 
     return router

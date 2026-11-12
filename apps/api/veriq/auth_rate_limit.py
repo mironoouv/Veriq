@@ -42,6 +42,7 @@ class AuthCategory(StrEnum):
     PASSWORD_CHANGE = "password_change"
     MFA_RECOVERY = "mfa_recovery"
     ORGANIZATION_JOIN = "organization_join"
+    BULK_IMPORT = "bulk_import"
 
 
 @dataclass(frozen=True)

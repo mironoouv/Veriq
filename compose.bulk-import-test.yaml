@@ -1,0 +1,5 @@
+# Combine with compose.yaml and compose.login-test.yaml. Loopback HTTPS only.
+services:
+  api:
+    environment:
+      VERIQ_ENABLE_TEST_BULK_IMPORT: "1"

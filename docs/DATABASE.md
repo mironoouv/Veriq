@@ -262,3 +262,24 @@ Future tenant provisioning must grant it explicitly. Requests and organization
 codes create pending memberships. An activating invitation can create a new
 active membership. An existing pending membership goes through moderation.
 No operation inserts a role assignment.
+
+### Auth Slice 8 bulk onboarding
+
+Revision 0015 adds user_import_batches, user_import_rows and user_import_events.
+The tenant/actor/content fingerprint identifies an upload for 24 hours.
+Batch and request links use composite tenant FKs. Confirm binds the immutable
+preview version, runs atomically, and returns the same batch on retry. Preview
+matches uploaded addresses against a materialized projection of membership in
+the current tenant. Confirmation makes the staged rows claimable and performs
+no account-dependent work. An address without local membership is classified
+as pending_onboarding regardless of its global status. The owner of the
+address uses an existing verified account or completes ordinary signup and
+email verification, then claims the matching row. Claim creates a pending
+membership and join request and refuses any existing membership. A staff
+member communicates the instructions and batch identifier through the
+organization's existing contact channel. The batch ID confers no membership
+or MFA assurance.
+The worker purges at most 25 expired batches each minute, cascading to staged
+rows. Access expires before physical cleanup and successful rows discard email.
+Audit retains identifiers and action timestamps without email. Future Org Admin
+provisioning explicitly grants organization.import.manage where intended.
