@@ -10,7 +10,9 @@ CHECKS = Path(__file__).with_name("membership_checks.py")
 
 
 def compose(*args: str, stdin: str | None = None) -> None:
-    subprocess.run([*COMPOSE, *args], input=stdin, text=True, check=True, timeout=120)
+    subprocess.run(
+        [*COMPOSE, *args], input=stdin, encoding="utf-8", check=True, timeout=120
+    )
 
 
 def database(sql: str) -> None:

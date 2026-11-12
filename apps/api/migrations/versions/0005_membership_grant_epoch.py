@@ -77,6 +77,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     # 0004 cannot represent history without risking reactivation. Keep it intact.
     op.execute("""
+        LOCK TABLE membership_roles IN ACCESS EXCLUSIVE MODE;
         DO $$
         BEGIN
             IF EXISTS (SELECT 1 FROM membership_roles) THEN
