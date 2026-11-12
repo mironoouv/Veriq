@@ -14,8 +14,8 @@ from veriq.registration_policy import HASHER
 from veriq.sessions import Sessions, SessionToken
 from veriq.tenant_access import AccessDenied
 
-ORG, OTHER, STAFF, STUDENT, INACTIVE, CLAIMANT, REVOKED = (
-    UUID(int=8200 + i) for i in range(7)
+ORG, OTHER, STAFF, STUDENT, INACTIVE, CLAIMANT, REVOKED, UNVERIFIED, DISABLED = (
+    UUID(int=8200 + i) for i in range(9)
 )
 
 
@@ -76,8 +76,12 @@ def seed(owner: Engine) -> None:
         (STUDENT, "student"),
         (INACTIVE, "inactive"),
         (REVOKED, "revoked"),
+        (UNVERIFIED, "unverified"),
+        (DISABLED, "disabled"),
     ):
         add_user(owner, user, f"{email}@example.invalid")
+    query(owner, "UPDATE users SET email_verified_at=NULL WHERE id=:id", id=UNVERIFIED)
+    query(owner, "UPDATE users SET disabled_at=now() WHERE id=:id", id=DISABLED)
     for member, org, state in (
         (STAFF, ORG, "active"),
         (STUDENT, OTHER, "active"),
@@ -115,7 +119,10 @@ def without_request_ids(batch: dict[str, object]) -> list[dict[str, object]]:
     rows = batch["rows"]
     assert isinstance(rows, list)
     for row in rows:
-        assert bool(row["request_id"]) == (row["state"] == "created")
+        if row["state"] == "claimed":
+            assert UUID(row["request_id"])
+        else:
+            assert row["request_id"] is None
     return [
         {key: value for key, value in row.items() if key != "request_id"}
         for row in rows
@@ -128,6 +135,7 @@ def run(owner: Engine, api: Engine) -> None:
     csv = (
         b"email\nStudent@Example.Invalid\ninactive@example.invalid\n"
         b"claimant@example.invalid\nstudent@example.invalid\nbad-email\nrevoked@example.invalid\n"
+        b"unverified@example.invalid\ndisabled@example.invalid\nstaff@example.invalid\n"
     )
     denied(lambda: imports.upload(ORG, staff, csv, "csv", "email"))
     query(
@@ -149,13 +157,28 @@ def run(owner: Engine, api: Engine) -> None:
     batch = UUID(str(left["batch_id"]))
     version = bytes.fromhex(str(left["version"]))
     assert without_request_ids(left) == [
-        {"row": 2, "email": "student@example.invalid", "state": "existing_account"},
+        {"row": 2, "email": "student@example.invalid", "state": "pending_onboarding"},
         {"row": 3, "email": "inactive@example.invalid", "state": "inactive_membership"},
-        {"row": 4, "email": "claimant@example.invalid", "state": "new_email"},
+        {"row": 4, "email": "claimant@example.invalid", "state": "pending_onboarding"},
         {"row": 5, "email": None, "state": "duplicate_in_file"},
         {"row": 6, "email": None, "state": "invalid_email"},
         {"row": 7, "email": "revoked@example.invalid", "state": "inactive_membership"},
+        {
+            "row": 8,
+            "email": "unverified@example.invalid",
+            "state": "pending_onboarding",
+        },
+        {"row": 9, "email": "disabled@example.invalid", "state": "pending_onboarding"},
+        {"row": 10, "email": "staff@example.invalid", "state": "existing_membership"},
     ]
+    assert left["counts"] == {
+        "pending_onboarding": 4,
+        "inactive_membership": 2,
+        "existing_membership": 1,
+        "duplicate_in_file": 1,
+        "invalid_email": 1,
+    }
+    assert imports.command(ORG, staff, "result", batch) == left
     denied(lambda: imports.command(OTHER, staff, "confirm", batch, version))
     denied(lambda: imports.command(ORG, staff, "confirm", batch, bytes(32)))
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -167,13 +190,35 @@ def run(owner: Engine, api: Engine) -> None:
         )
     assert left == right and left["confirmed"] is True
     assert without_request_ids(left) == [
-        {"row": 2, "email": None, "state": "created"},
+        {"row": 2, "email": None, "state": "pending_onboarding"},
         {"row": 3, "email": None, "state": "inactive_membership"},
-        {"row": 4, "email": None, "state": "awaiting_verification"},
+        {"row": 4, "email": None, "state": "pending_onboarding"},
         {"row": 5, "email": None, "state": "duplicate_in_file"},
         {"row": 6, "email": None, "state": "invalid_email"},
         {"row": 7, "email": None, "state": "inactive_membership"},
+        {"row": 8, "email": None, "state": "pending_onboarding"},
+        {"row": 9, "email": None, "state": "pending_onboarding"},
+        {"row": 10, "email": None, "state": "existing_membership"},
     ]
+    assert left["counts"] == {
+        "pending_onboarding": 4,
+        "inactive_membership": 2,
+        "existing_membership": 1,
+        "duplicate_in_file": 1,
+        "invalid_email": 1,
+    }
+    assert imports.command(ORG, staff, "result", batch) == left
+    assert imports.command(ORG, staff, "confirm", batch, version) == left
+    assert imports.upload(ORG, staff, csv, "csv", "email") == left
+    # A different fingerprint bypasses batch deduplication and would expose any
+    # membership written as a side effect of confirming the original batch.
+    replacement = imports.upload(
+        ORG, staff, csv.replace(b"Student@", b"STUDENT@"), "csv", "email"
+    )
+    assert replacement["batch_id"] != left["batch_id"]
+    assert replacement["counts"] == left["counts"]
+    assert without_request_ids(replacement)[0]["state"] == "pending_onboarding"
+    assert imports.command(ORG, staff, "result", batch) == left
     assert (
         query(
             owner,
@@ -187,7 +232,7 @@ def run(owner: Engine, api: Engine) -> None:
             "SELECT count(*) FROM organization_memberships WHERE user_id=:id",
             id=STUDENT,
         )
-        == 2
+        == 1
     )
     assert query(owner, "SELECT count(*) FROM membership_roles") == 1
     assert (
@@ -197,7 +242,15 @@ def run(owner: Engine, api: Engine) -> None:
     add_user(owner, CLAIMANT, "claimant@example.invalid")
     claimant = token(api, CLAIMANT)
     denied(lambda: imports.command(OTHER, claimant, "claim", batch))
-    denied(lambda: imports.command(ORG, token(api, STUDENT), "claim", batch))
+    # A verified account from another tenant joins only after its own claim.
+    student = token(api, STUDENT)
+    joined = imports.command(ORG, student, "claim", batch)
+    assert joined["status"] == "pending"
+    after_claim = imports.command(ORG, staff, "result", batch)
+    assert isinstance(after_claim["rows"], list)
+    assert after_claim["rows"][0]["request_id"] == joined["request_id"]
+    assert after_claim["rows"][0]["state"] == "claimed"
+    denied(lambda: imports.command(ORG, student, "claim", batch))
     query(owner, "UPDATE users SET email_verified_at=NULL WHERE id=:id", id=CLAIMANT)
     denied(lambda: imports.command(ORG, claimant, "claim", batch))
     query(owner, "UPDATE users SET email_verified_at=now() WHERE id=:id", id=CLAIMANT)
@@ -239,10 +292,10 @@ def run(owner: Engine, api: Engine) -> None:
         else:
             raise AssertionError("Runtime can read raw staged rows")
     query(owner, "UPDATE user_import_batches SET expires_at=now()-interval '1 second'")
-    assert query(role("veriq_worker"), "SELECT public.veriq_import_purge()") == 2
+    assert query(role("veriq_worker"), "SELECT public.veriq_import_purge()") == 3
     assert query(owner, "SELECT count(*) FROM user_import_rows") == 0
     print(
-        "Bulk import: upgrade, idempotence, concurrent confirm/revocation, claims, RLS and cleanup passed."
+        "Bulk import: six account/membership cases, anti-enumeration replay, confirm/revocation, claims, RLS and cleanup passed."
     )
 
 

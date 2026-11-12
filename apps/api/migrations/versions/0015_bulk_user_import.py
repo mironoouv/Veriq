@@ -33,14 +33,16 @@ def upgrade() -> None:
             request_id uuid,
             email text CHECK (length(email)<=254 AND lower(email)=email),
             state text NOT NULL CHECK (state IN ('invalid_email','unexpected_columns','duplicate_in_file',
-                'new_email','existing_account','existing_membership','inactive_membership',
-                'account_unavailable','awaiting_verification','created','claimed')),
+                'pending_onboarding','existing_membership','inactive_membership',
+                'claimed')),
+            CHECK ((state='claimed') = (request_id IS NOT NULL)),
+            CHECK (state<>'claimed' OR email IS NULL),
             PRIMARY KEY (organization_id,batch_id,row_number),
             FOREIGN KEY (organization_id,batch_id) REFERENCES public.user_import_batches(organization_id,id) ON DELETE CASCADE,
             FOREIGN KEY (organization_id,request_id) REFERENCES public.join_requests(organization_id,id)
         );
         CREATE INDEX user_import_claim_email ON public.user_import_rows(organization_id,email)
-            WHERE state='awaiting_verification';
+            WHERE state='pending_onboarding';
         CREATE TABLE public.user_import_events (
             id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
             organization_id uuid NOT NULL REFERENCES public.organizations(id),
@@ -98,10 +100,10 @@ def create_commands() -> None:
         ) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
         SET search_path=pg_catalog,pg_temp SET veriq.join_org='' SET veriq.import_cleanup='off' AS $$
         DECLARE actor uuid; actor_org uuid; actor_email text; item record; batch public.user_import_batches%ROWTYPE;
-            user_id_found uuid; member_id uuid; member_status text; verified boolean; state_now text;
+            member_id uuid;
         BEGIN
             IF p_action IS NULL OR p_action NOT IN ('authorize','preview','confirm','result','claim') THEN RETURN NULL; END IF;
-            SELECT s.user_id,s.organization_id,u.email_normalized::text INTO actor,actor_org,actor_email
+            SELECT s.user_id,s.organization_id INTO actor,actor_org
                 FROM public.auth_sessions s JOIN public.users u ON u.id=s.user_id
                 WHERE s.id=p_session AND s.token_hash=p_secret AND u.email_verified_at IS NOT NULL AND u.disabled_at IS NULL;
             IF actor IS NULL OR (p_action<>'claim' AND actor_org IS DISTINCT FROM p_org) THEN RETURN NULL; END IF;
@@ -118,10 +120,13 @@ def create_commands() -> None:
 
             IF p_action='authorize' THEN RETURN jsonb_build_object('status','authorized'); END IF;
             IF p_action='claim' THEN
+                SELECT email_normalized::text INTO actor_email FROM public.users
+                    WHERE id=actor AND email_verified_at IS NOT NULL AND disabled_at IS NULL;
+                IF NOT FOUND THEN RETURN NULL; END IF;
                 SELECT r.batch_id,r.row_number INTO item FROM public.user_import_rows r JOIN public.user_import_batches b
                     ON r.organization_id=b.organization_id AND r.batch_id=b.id
                     WHERE r.organization_id=p_org AND r.batch_id=p_batch AND r.email=actor_email
-                        AND r.state='awaiting_verification' AND b.confirmed_at IS NOT NULL
+                        AND r.state='pending_onboarding' AND b.confirmed_at IS NOT NULL
                         AND b.expires_at>clock_timestamp() FOR UPDATE OF b;
                 IF NOT FOUND OR EXISTS (SELECT FROM public.organization_memberships
                     WHERE organization_id=p_org AND user_id=actor) THEN RETURN NULL; END IF;
@@ -149,17 +154,24 @@ def create_commands() -> None:
                 IF batch.id IS NULL THEN
                     INSERT INTO public.user_import_batches(organization_id,id,actor_id,fingerprint)
                         VALUES (p_org,p_batch,actor,p_fingerprint) RETURNING * INTO batch;
+                    -- Materialize the tenant projection before matching any uploaded email.
+                    -- Nonmembers never probe the global email index or trigger account-specific writes.
+                    WITH tenant_members AS MATERIALIZED (
+                        SELECT m.status,u.email_normalized::text AS email
+                        FROM public.organization_memberships m
+                        CROSS JOIN LATERAL (
+                            SELECT email_normalized FROM public.users WHERE id=m.user_id OFFSET 0
+                        ) u
+                        WHERE m.organization_id=p_org
+                    )
                     INSERT INTO public.user_import_rows(organization_id,batch_id,row_number,email,state)
                         SELECT p_org,batch.id,r.number,r.email,
                             CASE WHEN r.error IN ('invalid_email','unexpected_columns','duplicate_in_file') THEN r.error
-                                WHEN u.id IS NULL THEN 'new_email'
-                                WHEN u.disabled_at IS NOT NULL OR u.email_verified_at IS NULL THEN 'account_unavailable'
                                 WHEN m.status IN ('suspended','revoked') THEN 'inactive_membership'
-                                WHEN m.id IS NOT NULL THEN 'existing_membership'
-                                ELSE 'existing_account' END
+                                WHEN m.status IS NOT NULL THEN 'existing_membership'
+                                ELSE 'pending_onboarding' END
                         FROM jsonb_to_recordset(p_rows) AS r(number integer,email text,error text)
-                        LEFT JOIN public.users u ON u.email_normalized::text=r.email
-                        LEFT JOIN public.organization_memberships m ON m.organization_id=p_org AND m.user_id=u.id;
+                        LEFT JOIN tenant_members m ON m.email=r.email;
                     INSERT INTO public.user_import_events(organization_id,batch_id,actor_id,action)
                         VALUES (p_org,batch.id,actor,'preview');
                 END IF;
@@ -172,35 +184,6 @@ def create_commands() -> None:
             END IF;
 
             IF p_action='confirm' AND batch.confirmed_at IS NULL THEN
-                FOR item IN SELECT row_number,email FROM public.user_import_rows
-                    WHERE organization_id=p_org AND batch_id=batch.id AND state IN (
-                        'new_email','existing_account','existing_membership','inactive_membership','account_unavailable'
-                    ) ORDER BY row_number LOOP
-                    member_id:=NULL;
-                    SELECT u.id, u.disabled_at IS NULL AND u.email_verified_at IS NOT NULL,m.status
-                        INTO user_id_found,verified,member_status
-                        FROM public.users u LEFT JOIN public.organization_memberships m
-                            ON m.organization_id=p_org AND m.user_id=u.id
-                        WHERE u.email_normalized::text=item.email;
-                    IF user_id_found IS NULL OR NOT verified THEN
-                        state_now:=CASE WHEN user_id_found IS NULL OR EXISTS (
-                            SELECT FROM public.users WHERE id=user_id_found AND disabled_at IS NULL
-                        ) THEN 'awaiting_verification' ELSE 'account_unavailable' END;
-                    ELSIF member_status IS NOT NULL THEN
-                        state_now:=CASE WHEN member_status IN ('suspended','revoked') THEN 'inactive_membership'
-                            ELSE 'existing_membership' END;
-                    ELSE
-                        member_id:=gen_random_uuid();
-                        INSERT INTO public.organization_memberships(id,organization_id,user_id,status)
-                            VALUES (member_id,p_org,user_id_found,'pending');
-                        INSERT INTO public.join_requests(id,organization_id,user_id,membership_id)
-                            VALUES (member_id,p_org,user_id_found,member_id);
-                        state_now:='created';
-                    END IF;
-                    UPDATE public.user_import_rows SET state=state_now,request_id=member_id,
-                        email=CASE WHEN state_now='awaiting_verification' THEN item.email END
-                        WHERE organization_id=p_org AND batch_id=batch.id AND row_number=item.row_number;
-                END LOOP;
                 UPDATE public.user_import_batches SET confirmed_at=clock_timestamp()
                     WHERE organization_id=p_org AND id=batch.id RETURNING * INTO batch;
                 INSERT INTO public.user_import_events(organization_id,batch_id,actor_id,action)

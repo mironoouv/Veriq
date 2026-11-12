@@ -215,3 +215,14 @@ global advisory guard. The API applies a five-second statement timeout and
 two-second lock timeout. The worker receives only the bounded expiry cleanup
 function, so Redis downtime does not prevent removal of expired staged data.
 Larger batches and production concurrency need separate performance validation.
+
+Import staff responses do not reveal global account existence. Preview
+materializes email/status from the caller's organization memberships by
+account ID before matching uploaded rows. Unmatched addresses follow the same
+pending_onboarding path with identical counts and null request IDs in preview,
+confirm and result. Confirmation only changes batch state. This avoids a global
+email-index probe, per-account execution branch or new membership that a second
+upload could detect. Claim checks the authenticated user's own enabled, verified
+account after locking and binds its email to the confirmed row. The resulting
+local membership and request are visible only after that user's action. No
+runtime role has direct access to staged rows.

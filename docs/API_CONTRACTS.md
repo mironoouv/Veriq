@@ -146,9 +146,13 @@ existing Secure/HttpOnly session cookie, exact Origin, CSRF and Redis limits.
 | claim | JSON batch_id | Pending membership and join request for a verified matching account |
 
 Staff actions require organization.import.manage in the session tenant and a
-fresh sensitive MFA step-up. Confirm rechecks both and recalculates results
-against current account and membership state. Preview and reports return JSON
-only. Confirmed reports contain row numbers, state and any created request ID.
-Valid states distinguish existing and inactive membership, unavailable account,
-new address awaiting verification, created membership and verified claim.
-Invalid email, unexpected columns and in-file duplicates have row-level codes.
+fresh sensitive MFA step-up. Confirm rechecks authorization and enables the
+claim window without performing an account lookup for uploaded addresses.
+Preview may distinguish active/pending membership from suspended/revoked
+membership within the same organization. For any valid address without local
+membership, preview, confirm and result use pending_onboarding, including in
+counts, with a null request_id. The normalized email echoed in preview is the
+input value. Confirmed reports omit emails. Only a verified user's successful
+claim creates a pending membership and exposes its request ID to the batch
+owner. A different or repeated upload never creates a membership. Invalid
+email, unexpected columns and in-file duplicates have row-level codes.

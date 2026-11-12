@@ -268,16 +268,17 @@ No operation inserts a role assignment.
 Revision 0015 adds user_import_batches, user_import_rows and user_import_events.
 The tenant/actor/content fingerprint identifies an upload for 24 hours.
 Batch and request links use composite tenant FKs. Confirm binds the immutable
-preview version, runs atomically, and returns the same batch on retry. Existing
-verified accounts without membership get a pending membership and join
-request. Suspended, revoked or already present memberships stay as they are.
-Unknown or unverified addresses are staged as awaiting_verification, with no
-account created by import. The account owner completes ordinary signup and
-email verification before an authenticated claim for the matching batch.
-A staff member communicates the registration instructions and batch identifier
-through the organization's existing contact channel. The batch ID conveys no
-membership or assurance by itself.
-
+preview version, runs atomically, and returns the same batch on retry. Preview
+matches uploaded addresses against a materialized projection of membership in
+the current tenant. Confirmation makes the staged rows claimable and performs
+no account-dependent work. An address without local membership is classified
+as pending_onboarding regardless of its global status. The owner of the
+address uses an existing verified account or completes ordinary signup and
+email verification, then claims the matching row. Claim creates a pending
+membership and join request and refuses any existing membership. A staff
+member communicates the instructions and batch identifier through the
+organization's existing contact channel. The batch ID confers no membership
+or MFA assurance.
 The worker purges at most 25 expired batches each minute, cascading to staged
 rows. Access expires before physical cleanup and successful rows discard email.
 Audit retains identifiers and action timestamps without email. Future Org Admin
