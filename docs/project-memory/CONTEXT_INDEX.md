@@ -2,7 +2,7 @@
 
 | Область | Открыть для задачи |
 |---|---|
-| Auth | [План Auth (APPROVED)](../../planning/AUTH_ACCOUNT_SECURITY.md), [SECURITY](../SECURITY.md), [DATABASE](../DATABASE.md), [API](../API_CONTRACTS.md) |
+| Auth | [План Auth (APPROVED)](../../planning/AUTH_ACCOUNT_SECURITY.md), [проект Slice 6 (PROPOSED)](../../planning/AUTH_MFA_RECOVERY.md), [SECURITY](../SECURITY.md), [DATABASE](../DATABASE.md), [API](../API_CONTRACTS.md) |
 | Studio | [ТЗ](../VERIQ_SPEC.md), [API](../API_CONTRACTS.md), [дизайн](../DESIGN_SYSTEM.md) |
 | Exam Engine | [ТЗ](../VERIQ_SPEC.md), [архитектура](../ARCHITECTURE.md), [приёмка](../ACCEPTANCE.md) |
 | Judge | [JUDGE_SPEC](../JUDGE_SPEC.md), [границы доверия](../SECURITY.md), [открытые вопросы](../OPEN_QUESTIONS.md) |
