@@ -29,6 +29,7 @@ from veriq.auth_rate_limit import (
 )
 from veriq.mfa import Mfa, Purpose
 from veriq.mfa_recovery import MfaRecovery, RecoveryAction
+from veriq.organization_joining import JoinCommand, OrganizationJoining
 from veriq.password_recovery import PasswordRecovery
 from veriq.password_work import PasswordCapacityExceeded, PasswordWork
 from veriq.registration import Address, Signup, Verify, _body_schema, _error, _payload
@@ -865,5 +866,44 @@ def browser_router(
 
     if mfa_recovery is not None:
         enable_recovery_workflow(mfa_recovery)
+
+    if os.environ.get("VERIQ_ENABLE_TEST_ORGANIZATION_JOINING") == "1":
+        joining = OrganizationJoining(engine)
+
+        @router.post(
+            "/organizations/{organization_id}/joining",
+            openapi_extra=_body_schema(JoinCommand),
+        )
+        async def organization_join(
+            organization_id: UUID, request: Request
+        ) -> Response:
+            context = RequestContext.new()
+            if not csrf_valid(request):
+                return _error(context, "CSRF_DENIED", 403)
+            if request.client is None:
+                return _error(context, "INVALID_REQUEST", 400)
+            try:
+                command = JoinCommand.model_validate(await _payload(request))
+                token = SessionToken(request.cookies.get(SESSION, ""))
+                gate = token._gate(joining.policy)
+                await limiter.check(
+                    AuthCategory.ORGANIZATION_JOIN,
+                    trusted_client_ip(request.client.host, None, ()),
+                    str(gate.session_id),
+                )
+                data = await asyncio.to_thread(
+                    joining.execute, organization_id, token, command, context
+                )
+            except AuthLimitRejected as error:
+                response = error.response(context)
+                response.headers.update(HEADERS)
+                return response
+            except (ValueError, RecursionError):
+                return _error(context, "INVALID_REQUEST", 400)
+            except AccessDenied:
+                return _error(context, "JOINING_DENIED", 404)
+            except SQLAlchemyError:
+                return _error(context, "SERVICE_UNAVAILABLE", 503)
+            return JSONResponse(data, headers=HEADERS)
 
     return router

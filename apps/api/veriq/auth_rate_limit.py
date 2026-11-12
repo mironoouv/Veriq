@@ -41,6 +41,7 @@ class AuthCategory(StrEnum):
     PASSWORD_RESET_CONFIRM = "password_reset_confirm"
     PASSWORD_CHANGE = "password_change"
     MFA_RECOVERY = "mfa_recovery"
+    ORGANIZATION_JOIN = "organization_join"
 
 
 @dataclass(frozen=True)
