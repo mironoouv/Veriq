@@ -52,9 +52,18 @@
 
 ## Локальный запуск Foundation 1a
 
-Требуются Docker Desktop с Linux Engine, Docker Compose v2 или новее и Python 3.11
-для генерации локального пароля и запуска проверок. В PowerShell из корня проекта
-один раз создайте `.env`, сохранив уже существующий файл:
+Требуются Docker Desktop в режиме Linux Containers с WSL 2, Docker Compose v2
+или новее и Python 3.11 для генерации локального пароля и запуска проверок.
+Перед запуском проверьте, что `docker info --format '{{.OSType}}'` возвращает
+`linux`, а `docker compose version` выводит версию Compose.
+
+На компьютере с отдельным диском для разработки рекомендуем `E:\DockerData`.
+Расположение образа диска задаётся в Docker Desktop через **Settings → Resources →
+Advanced → Disk image location**. После **Apply & Restart** проверьте доступность
+Engine через `docker info`, наличие файла образа диска в выбранном каталоге и
+состав контейнеров, образов и томов. [Документация Docker Desktop](https://docs.docker.com/desktop/features/wsl/)
+
+В PowerShell из корня проекта один раз создайте `.env`, сохранив существующий файл:
 
 ```powershell
 if (-not (Test-Path .env)) {
@@ -64,6 +73,8 @@ if (-not (Test-Path .env)) {
     Remove-Variable veriqDbPassword
 }
 docker compose -f compose.yaml -f compose.dev.yaml up --build --wait
+docker compose -f compose.yaml -f compose.dev.yaml ps --all
+docker compose -f compose.yaml -f compose.dev.yaml exec -T api alembic current --check-heads
 python tests/smoke.py
 ```
 
@@ -104,6 +115,6 @@ Foundation 1a включает Vue 3 / TypeScript, FastAPI, SQLAlchemy, Alembic 
 Веб-интерфейс обращается к API через Vite proxy. Миграции и переход готовности API
 при отключении и восстановлении PostgreSQL проверены на Windows с PostgreSQL 17.11.
 
-Известное ограничение: Docker Desktop Linux Engine на проверенной Windows-машине
-возвращал HTTP 500. Проверка конфигурации Compose прошла, полный запуск через
-Docker Compose ещё предстоит подтвердить. Foundation остаётся открытым.
+При HTTP 500 от Docker Engine проверьте состояние Docker Desktop и дождитесь
+готовности Linux Engine. До успешного выполнения команд запуска и smoke-проверки
+окружение считается непроверенным.
