@@ -177,14 +177,13 @@ def checks(url: str, owner: Engine, worker: Engine, cipher: Fernet, root: Path) 
 
     assert send(url, "/resend-verification", email=missing)[:2] == (202, b"")
     assert send(url, "/resend-verification", email=email)[:2] == (202, b"")
-    assert deliver_verification(worker, cipher, mailbox)
-    second = next(path for path in root.glob("*.json") if path != first)
-    proof = json.loads(second.read_text(encoding="utf-8"))["path"].split("#")[1]
-    assert proof != original
+    assert send(url, "/resend-verification", email=email.upper())[:2] == (202, b"")
+    assert not deliver_verification(worker, cipher, mailbox)
     assert (
-        send(url, "/verify-email", email=email, password=FINAL, proof=original)[0]
-        == 400
+        query(owner, "SELECT digest FROM email_verification_proofs")
+        == sha256(original.encode()).digest()
     )
+    proof = original
     wrong_email = send(url, "/verify-email", email=missing, password=FINAL, proof=proof)
     assert wrong_email[0] == 400 and proof.encode() not in wrong_email[1]
     wrong_purpose = send(
@@ -207,7 +206,7 @@ def checks(url: str, owner: Engine, worker: Engine, cipher: Fernet, root: Path) 
     )
     assert send(url, "/resend-verification", email=email)[0] == 202
     assert deliver_verification(worker, cipher, mailbox)
-    third = next(path for path in root.glob("*.json") if path not in (first, second))
+    third = next(path for path in root.glob("*.json") if path != first)
     proof = json.loads(third.read_text(encoding="utf-8"))["path"].split("#")[1]
 
     def verify(_: int) -> int:
@@ -231,7 +230,6 @@ def checks(url: str, owner: Engine, worker: Engine, cipher: Fernet, root: Path) 
         pass
     else:
         raise AssertionError("Pre-confirmation password was retained")
-    assert send(url, "/resend-verification", email=email)[0] == 202
     limited = send(url, "/resend-verification", email=email)
     assert limited[0] == 429 and int(limited[2]["retry-after"]) > 0
     assert query(owner, "SELECT count(*) FROM email_verification_outbox") == 0

@@ -86,7 +86,8 @@ def upgrade() -> None:
             IF NOT FOUND THEN RETURN; END IF;
             SELECT p.id INTO old_id FROM public.email_verification_proofs AS p
             JOIN public.users AS u ON u.id = p.user_id AND u.disabled_at = p.pending_since
-            WHERE p.user_id = account AND p.email_normalized = p_email AND p.consumed_at IS NULL;
+            WHERE p.user_id = account AND p.email_normalized = p_email AND p.consumed_at IS NULL
+                AND p.expires_at <= clock_timestamp();
             IF NOT FOUND THEN RETURN; END IF;
             DELETE FROM public.email_verification_outbox WHERE proof_id = old_id;
             UPDATE public.email_verification_proofs SET id = p_id, digest = p_digest,
