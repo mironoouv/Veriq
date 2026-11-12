@@ -57,7 +57,7 @@ async def main() -> int:
                 HEARTBEAT.touch()
             except SQLAlchemyError:
                 LOG.warning("Background database operation unavailable")
-                stopped.wait(1)
+                await asyncio.sleep(1)
                 continue
             if not processed:
                 try:
@@ -66,10 +66,11 @@ async def main() -> int:
                             Awaitable[object], redis.blpop([WAKE_QUEUE], timeout=1)
                         )
                 except (RedisError, TimeoutError):
-                    stopped.wait(1)
-        HEARTBEAT.unlink(missing_ok=True)
+                    await asyncio.sleep(1)
         return 0
     finally:
+        if args.command == "run":
+            HEARTBEAT.unlink(missing_ok=True)
         await redis.aclose()
         engine.dispose()
 

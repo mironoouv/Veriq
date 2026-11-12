@@ -63,6 +63,7 @@ services:
     <<: *api
     environment: *worker-env
     command: ["python", "-m", "veriq.worker", "run"]
+    stop_grace_period: 30s
     networks: [database, queue]
     depends_on:
       migrate:

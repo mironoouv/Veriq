@@ -69,8 +69,13 @@ def expect_job(job_id: str, expected: str) -> None:
 
 
 def main() -> None:
-    if not os.environ.get("COMPOSE_PROJECT_NAME", "").startswith("veriq-"):
-        raise SystemExit("Set COMPOSE_PROJECT_NAME to a disposable veriq-* project")
+    if os.environ.get("COMPOSE_PROJECT_NAME") not in {
+        "veriq-ci",
+        "veriq-worker-smoke-local",
+    }:
+        raise SystemExit(
+            "Run the worker smoke test only in the dedicated local or CI project"
+        )
 
     first, second, third = (str(uuid4()) for _ in range(3))
     compose("exec", "-T", "worker", "python", "-m", "veriq.worker", "health")
@@ -86,7 +91,24 @@ def main() -> None:
         assert health("ready") == 503
         enqueue(second)
         expect_job(second, "succeeded|1")
+        worker_id = compose("ps", "-q", "worker")
+        assert worker_id
         compose("stop", "worker")
+        assert (
+            subprocess.check_output(
+                [
+                    "docker",
+                    "inspect",
+                    "--format",
+                    "{{.State.Status}}:{{.State.ExitCode}}",
+                    worker_id,
+                ],
+                text=True,
+                timeout=15,
+            ).strip()
+            == "exited:0"
+        )
+        print("Worker stopped gracefully during the Redis outage.")
         enqueue(third)
         expect_job(third, "pending|0")
 
