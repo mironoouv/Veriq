@@ -1,0 +1,53 @@
+name: veriq
+
+x-api: &api
+  build: ./apps/api
+  environment:
+    VERIQ_DB_USER: veriq_dev
+    VERIQ_DB_NAME: veriq
+    VERIQ_DB_HOST: postgres
+    VERIQ_DB_PASSWORD: ${VERIQ_DB_PASSWORD:?Generate a local password in .env}
+  networks: [database]
+
+services:
+  postgres:
+    image: postgres:17.11-bookworm
+    environment:
+      POSTGRES_DB: veriq
+      POSTGRES_USER: veriq_dev
+      POSTGRES_PASSWORD: ${VERIQ_DB_PASSWORD:?Generate a local password in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [database]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "veriq_dev", "-d", "veriq"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+  migrate:
+    <<: *api
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *api
+    networks: [database, app]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=3).close()"]
+      interval: 5s
+      timeout: 4s
+      retries: 10
+
+networks:
+  database:
+    internal: true
+  app:
+
+volumes:
+  postgres-data:

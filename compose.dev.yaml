@@ -1,0 +1,19 @@
+services:
+  api:
+    environment:
+      VERIQ_ENV: development
+  web:
+    build: ./apps/web
+    environment:
+      VERIQ_API_ORIGIN: http://api:8000
+    ports:
+      - "127.0.0.1:${VERIQ_WEB_PORT:-5173}:5173"
+    networks: [app]
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5173/').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 4s
+      retries: 10

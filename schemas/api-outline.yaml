@@ -1,0 +1,27 @@
+openapi: 3.1.0
+info:
+  title: Veriq API — outline only
+  version: 0.1.0-spec
+  description: >
+    Illustrative contract skeleton. NOT complete/openapi production file.
+servers:
+  - url: https://veriq.void-rp.ru/api/v1
+paths:
+  /health/live:
+    get:
+      operationId: healthLive
+      responses:
+        '200':
+          description: Process alive
+  /attempts/{attempt_id}:
+    get:
+      operationId: getAttempt
+      parameters:
+        - name: attempt_id
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        '200': {description: Authorized attempt snapshot}
+        '403': {description: Unauthorized}
+        '404': {description: Not found}

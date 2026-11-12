@@ -1,0 +1,39 @@
+name: Foundation
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      COMPOSE_FILE: compose.yaml:compose.dev.yaml
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Configure ephemeral database
+        run: |
+          password="$(openssl rand -hex 32)"
+          echo "::add-mask::$password"
+          echo "VERIQ_DB_PASSWORD=$password" >> "$GITHUB_ENV"
+      - name: Check Python sources and run API tests
+        run: docker build --target checks apps/api
+      - name: Build and start stack
+        run: docker compose up --build --wait --wait-timeout 90
+      - name: Check web formatting, types and build
+        run: |
+          docker compose run --no-deps --rm web npm run check:format
+          docker compose run --no-deps --rm web npm run check:types
+          docker compose run --no-deps --rm web npm run build
+      - name: Verify migration and same-origin connectivity
+        run: |
+          docker compose exec -T api alembic current --check-heads
+          docker compose exec -T postgres psql -U veriq_dev -d veriq -v ON_ERROR_STOP=1 -c 'SELECT id FROM organizations LIMIT 0; SELECT id FROM users LIMIT 0;'
+          python3 tests/smoke.py
+      - name: Stop stack
+        if: always()
+        run: docker compose down

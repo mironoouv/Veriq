@@ -1,0 +1,208 @@
+{
+  "project": "Veriq v1.0",
+  "generated_at": "2026-11-12",
+  "type": "specification-only",
+  "file_count_excluding_manifest": 40,
+  "files": [
+    {
+      "path": "AGENTS.md",
+      "sha256": "c9636f4325ad4af6ea2b77337f42ec513861f0361594ef63678bc0b6872ddc46",
+      "bytes": 2095
+    },
+    {
+      "path": "README.md",
+      "sha256": "a0441d8b8e4fd0f0ed4ca7f00b4b0222cdf54aed601206557bf1944e034b8a22",
+      "bytes": 4625
+    },
+    {
+      "path": "docs/ACCEPTANCE.md",
+      "sha256": "e88655cff75b91ae27b2309d78af60c41605f593c2637758ba7b2dd5167cd38f",
+      "bytes": 2644
+    },
+    {
+      "path": "docs/AGENT_SPEC.md",
+      "sha256": "4c359345abdb1a2d4ec2b491a581726d43edc1897571020611f8b17370feffb2",
+      "bytes": 5459
+    },
+    {
+      "path": "docs/API_CONTRACTS.md",
+      "sha256": "af10a77523577b4eeaad8fc1d5db0fe799c75ef78148f589df14c13f7395ff2f",
+      "bytes": 4842
+    },
+    {
+      "path": "docs/ARCHITECTURE.md",
+      "sha256": "5585727f048c5940c83dcfd2a8069c58eeaa242df0035dd0df6b74f160f14b49",
+      "bytes": 4990
+    },
+    {
+      "path": "docs/BACKUP_STORAGE.md",
+      "sha256": "7463beb4b230b94023c7a6da166eea3540fca6c17749314ba01cb84d0ea8d524",
+      "bytes": 3175
+    },
+    {
+      "path": "docs/DATABASE.md",
+      "sha256": "610bd8332506048314af4f6930da08d3819f3cbd40fc9182e89e749b33960f1f",
+      "bytes": 7946
+    },
+    {
+      "path": "docs/DECISIONS.md",
+      "sha256": "b1a3b768048aeefa5c6dde4e83bfc3d78020c2dce7ced2e3b2b51d6eb360526a",
+      "bytes": 4101
+    },
+    {
+      "path": "docs/DEPLOYMENT.md",
+      "sha256": "9e3327a6a0c2a7483d33c2516b2033aed4c7e0888839d02d2c7c626fc10eb364",
+      "bytes": 2447
+    },
+    {
+      "path": "docs/DESIGN_SYSTEM.md",
+      "sha256": "330b2c373db9b1626c92ba99dc0cf361f66dae090728ad273503fa0960db57c5",
+      "bytes": 3222
+    },
+    {
+      "path": "docs/JUDGE_SPEC.md",
+      "sha256": "9d05697ce37dae18e140d1a4cc0eda3ea14780dec5d367d5752b9cdd086eaa44",
+      "bytes": 3272
+    },
+    {
+      "path": "docs/OPEN_QUESTIONS.md",
+      "sha256": "59f8cb262358dd3dcebb10bbb2b7e00e86bc29a91c6152ae583404d7a54b1b60",
+      "bytes": 2421
+    },
+    {
+      "path": "docs/PROCTORING.md",
+      "sha256": "2a858c84e5c47d388122fbcd1e80e9a3b5a0d3e6fb7cc3a22e7399801e1dfbaa",
+      "bytes": 3348
+    },
+    {
+      "path": "docs/SECURITY.md",
+      "sha256": "cd337503950e3a09ea24825204435e88ed9b95efbf821e5d333a596569a23523",
+      "bytes": 5231
+    },
+    {
+      "path": "docs/TESTING.md",
+      "sha256": "53d7305e9e2866ddc2cb89be5ee83b5b75a8d5739fc7278b43e1bcc42d03abe2",
+      "bytes": 2882
+    },
+    {
+      "path": "docs/VERIQ_SPEC.md",
+      "sha256": "449091063eb82dd0663adce8926003b6308a75f57f38bbcb9a261ebd69ef5839",
+      "bytes": 14038
+    },
+    {
+      "path": "docs/adr/ADR-001-agent-policy.md",
+      "sha256": "d86a46b4d0e9bc0191f910f4c976712cf671fea818e7b41a7895c2e54380fa19",
+      "bytes": 704
+    },
+    {
+      "path": "docs/adr/ADR-002-management.md",
+      "sha256": "82f06ca4e27b24163a658695d3359f4766432a67151db98ffb380d8ac58c2864",
+      "bytes": 653
+    },
+    {
+      "path": "docs/adr/ADR-003-onboarding.md",
+      "sha256": "ce2c7c8733aed9355bcc6df880f456feb999f63c3984d601e3f30bc2f0d3bc0d",
+      "bytes": 640
+    },
+    {
+      "path": "docs/adr/ADR-004-grading.md",
+      "sha256": "f8a1876cef4e59468f77e7e71395ac796b11c52509de8cc53bd8fa93098b3861",
+      "bytes": 650
+    },
+    {
+      "path": "docs/adr/ADR-005-question-banks.md",
+      "sha256": "42e7942fbe0c605b9aeb763066ce582e52feca00547132bc31cd0e2270fe6725",
+      "bytes": 646
+    },
+    {
+      "path": "docs/adr/ADR-006-scheduling.md",
+      "sha256": "b8a0c56bebe8fce3b31c0126efe2fb58ca50d90022f949fec3fc48f02c293b2c",
+      "bytes": 610
+    },
+    {
+      "path": "docs/adr/ADR-007-attempts.md",
+      "sha256": "d74b9b35c3d4979a829b0c3bdcac979f0c3269fc100bcfdcba96a5515f00d8cd",
+      "bytes": 674
+    },
+    {
+      "path": "docs/adr/ADR-008-connectivity.md",
+      "sha256": "084c4e61bb79030dac82533de3ea37b2def5cbd1854cb595f38710473a62b54a",
+      "bytes": 638
+    },
+    {
+      "path": "docs/adr/ADR-009-profiles.md",
+      "sha256": "27817ff967fe73260c70412dc8bb5a54e1a8a8a38f03615124f10909c1001d7d",
+      "bytes": 633
+    },
+    {
+      "path": "docs/adr/ADR-010-reactions.md",
+      "sha256": "4cb8b58fd0b15f0c63ce9f9ce5b3072f474a6590257a491db168e7e64ef9bc52",
+      "bytes": 630
+    },
+    {
+      "path": "docs/adr/ADR-011-enrollment.md",
+      "sha256": "05712a15133c3e28962a8e7e8e7fb2bce96aa7423265d84fcbbc8eb1d078079b",
+      "bytes": 644
+    },
+    {
+      "path": "docs/adr/ADR-012-live-only.md",
+      "sha256": "c56339b9072b11fe6a6ea59915501f325d92c1845dd669dde69bcecef3380836",
+      "bytes": 619
+    },
+    {
+      "path": "docs/adr/ADR-013-incident-retention.md",
+      "sha256": "fa5e6e496eef32ce65b64d27166f13ac5ee242012a5d6c7ea256d23b6f37d05e",
+      "bytes": 628
+    },
+    {
+      "path": "docs/adr/ADR-014-mfa.md",
+      "sha256": "22a62c9d38d2a32a41038ee4e7b1096cfd8c8c5458f8b1909e686824e4fae42a",
+      "bytes": 635
+    },
+    {
+      "path": "docs/adr/ADR-015-mfa-recovery.md",
+      "sha256": "b0aebae3f450c23b6ac1fa1c656fcd3042a0a00ca2f9c185b1e4124f35f34a12",
+      "bytes": 651
+    },
+    {
+      "path": "docs/adr/ADR-016-backup-storage.md",
+      "sha256": "1db29e8835bb5852b80567e7f8df683abd46b2245a033b7aba15d6a3ce6b8df0",
+      "bytes": 663
+    },
+    {
+      "path": "docs/adr/README.md",
+      "sha256": "9380b4ef342ac97030aeef3f5c1ec70f5c27dfc4b86763c79e81295bbc21aeaf",
+      "bytes": 187
+    },
+    {
+      "path": "examples/.env.example",
+      "sha256": "457acbb99a3b29eb8032131e43ce41a4acc9ef5d48099d64b6f8a64986929a37",
+      "bytes": 458
+    },
+    {
+      "path": "examples/README.md",
+      "sha256": "a317c39e34b03b033c89caf4dbbbe18ec73993f30eb91aa6f6b2efd7520a5275",
+      "bytes": 206
+    },
+    {
+      "path": "planning/ROADMAP.md",
+      "sha256": "2f68164c079fbded6dd82afe4a1f1cbaf3c1b57e083338639c828efad9f9c959",
+      "bytes": 1442
+    },
+    {
+      "path": "planning/TASKS.md",
+      "sha256": "b0f7d059f3bb3134dc0a6e8a2b18369a425322c98e36fc3b79126f980914acb9",
+      "bytes": 2084
+    },
+    {
+      "path": "schemas/api-outline.yaml",
+      "sha256": "189d2b77b8cadfb49039cf137402318b777640a3f2ee9132aebf8f636d9dc254",
+      "bytes": 710
+    },
+    {
+      "path": "schemas/policy-example.json",
+      "sha256": "f718a51e03318151ad94109dd5f1782871b4f7cfb9cfe2b949fc0a988f4d51f6",
+      "bytes": 624
+    }
+  ]
+}

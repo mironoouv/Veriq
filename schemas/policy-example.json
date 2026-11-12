@@ -1,0 +1,32 @@
+{
+  "spec_version": "0.1-spec",
+  "agent_requirement": "required",
+  "connectivity_policy": {
+    "mode": "strict",
+    "offline_grace_seconds": 0
+  },
+  "proctoring": {
+    "profile": "standard",
+    "recording": false,
+    "screenshots": false,
+    "stream": {
+      "quality": "720p",
+      "fps_max": 10
+    },
+    "incident_reactions": {
+      "agent_disconnect": [
+        "log",
+        "teacher_notification",
+        "technical_pause"
+      ],
+      "focus_change": [
+        "log",
+        "teacher_notification"
+      ]
+    }
+  },
+  "grading": {
+    "scale": "five_point",
+    "publication": "after_review"
+  }
+}

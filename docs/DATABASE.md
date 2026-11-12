@@ -1,0 +1,84 @@
+# DATABASE — модель PostgreSQL (проект; не готовые миграции)
+
+## Общие правила
+- UUID primary keys, `created_at`, `updated_at`, versions for mutable records, timestamptz UTC.
+- Все tenant-owned таблицы содержат `organization_id` NOT NULL и правильные composite FK для исключения cross-tenant relations. Индексы начинаются с `organization_id` для типичных tenant queries.
+- Global `users` tenant_id не имеет, но доступ через memberships. В таблицах audit и exam попыток сохраняется историческая информация о роли/назначении на момент события.
+- RLS — defense in depth, не замена application auth; tenant scope устанавливается **SET LOCAL** только внутри транзакции; service-role bypass и background jobs отдельно протестировать.
+- На уровне сервиса нет произвольного удаления оценок или журналов без policy.
+
+## Identity / Academic
+`users(id,email_normalized unique,email_verified_at,password_hash,disabled_at,...)`
+`auth_sessions(id,user_id,token_hash,device_hint,created_at,last_seen_at,expires_at,revoked_at,mfa_level)`
+`mfa_factors(id,user_id,kind,encrypted_secret,created_at,last_used_at)`; `recovery_codes(id,user_id,code_hash,used_at)`
+`organizations(id,slug unique,display_name,timezone,retention_policy_id,status)`
+`organization_memberships(id,organization_id,user_id,status,joined_at,unique(org,user))`
+`roles(id,organization_id nullable,code)`; `permissions(id,code)`; `role_permissions(role_id,permission_id)`; `membership_roles(membership_id,role_id)`
+`invites(id,organization_id,token_hash,scope,expires_at,uses_left,invited_email_hash,created_by)`
+`join_requests(id,organization_id,user_id,status,reviewed_by,...)`
+`group_join_codes(id,organization_id,group_id,code_hash,expires_at,uses_left,approval_required)`
+`study_groups(id,organization_id,name,academic_year,status)`
+`group_memberships(id,organization_id,group_id,membership_id,start_at,end_at)`
+`courses(id,organization_id,title)`; `course_teachers(organization_id,course_id,membership_id)`
+`imports(id,organization_id,source_filename,checksum,status,preview_summary,created_by)`; `import_rows(id,import_id,row_hash,status,error_codes)`
+
+## Question banks / Exam
+`question_banks(id,organization_id,owner_membership_id,title,visibility)`
+`bank_acl(id,organization_id,bank_id,subject_membership_id nullable,subject_role nullable,permission)`
+`questions(id,organization_id,bank_id,type,current_version_id)`
+`question_versions(id,organization_id,question_id,version,body_json,max_points,grading_policy_json,answer_key_encrypted,immutable_at)`
+`assessments(id,organization_id,owner_membership_id,kind,status,title,course_id)`
+`assessment_drafts(id,organization_id,assessment_id,editable_content,revision)`
+`assessment_publications(id,organization_id,assessment_id,version,content_hash,policy_snapshot_json,published_at)`
+`assessment_items(id,organization_id,publication_id,question_version_id,section,ordinal,weight,selection_rule)`
+`assignments(id,organization_id,publication_id,opens_at,closes_at,time_limit_seconds,attempt_limit,timezone,agent_requirement,connectivity_policy,results_policy,status)`
+`assignment_targets(id,organization_id,assignment_id,group_id nullable,membership_id nullable)`
+`calendar_events(id,organization_id,assignment_id nullable,event_kind,starts_at,ends_at,location,...)`
+`attempts(id,organization_id,assignment_id,student_membership_id,status,attempt_number,started_at,deadline_at,paused_at,remaining_seconds,version,lease_version,submitted_at,grade_status)`
+`attempt_variants(id,organization_id,attempt_id,seed,immutable_variant_json,hash)`
+`answers(id,organization_id,attempt_id,item_id,answer_payload,revision,server_confirmed_at)`
+`answer_operations(id,organization_id,attempt_id,client_operation_id,answer_id,expected_revision,status,unique(attempt_id,client_operation_id))`
+`grade_entries(id,organization_id,attempt_id,item_id,points,grader_kind,grader_membership_id,reason,revision)`
+`grade_revisions(id,organization_id,attempt_id,old_grade,new_grade,actor_id,reason,created_at)`
+`result_publications(id,organization_id,attempt_id,visibility,visible_from)`
+
+## Agent / Monitoring
+`agent_devices(id,organization_id,device_public_key,hardware_hint_hash,approved_at,revoked_at,group_id,current_version,last_seen_at)`
+`agent_enrollments(id,organization_id,token_hash,expires_at,allowed_count,used_count,requested_by)`
+`agent_enrollment_requests(id,organization_id,device_id,status,approved_by)`
+`agent_device_groups(id,organization_id,name)`
+`agent_config_revisions(id,organization_id,device_id nullable,group_id nullable,revision,config_json,created_by)`
+`agent_commands(id,organization_id,device_id,command_kind,payload_json,nonce,expires_at,status,created_by,ack_at)`
+`agent_update_rollouts(id,organization_id,channel,version,cohort,status,schedule)`
+`agent_heartbeats(id,organization_id,device_id,received_at,status)` — partition/TTL; raw heartbeat frequency not 1 row per second indefinitely
+`agent_pairings(id,organization_id,attempt_id,device_id,grant_hash,created_at,expires_at,redeemed_at,revoked_at)`
+`proctoring_sessions(id,organization_id,attempt_id,device_id,status,started_at,ended_at,policy_snapshot_json)`
+`proctoring_viewers(id,organization_id,session_id,viewer_membership_id,joined_at,left_at)`
+`proctoring_incidents(id,organization_id,attempt_id,device_id,event_type,severity,occurred_at,received_at,metadata_json,status,reviewed_by,reviewed_at,resolution_note,purge_after)`
+
+## Audit / Storage / Judge
+`audit_events(id,organization_id nullable,actor_user_id,actor_membership_id,action,resource_type,resource_id,request_id,created_at,outcome,reason,old_digest,new_digest,metadata_minimal)` (append-only, partitioning/retention)
+`approval_requests(id,organization_id nullable,kind,requested_by,approved_by,status,expires_at,reason)`
+`judge_submissions(id,organization_id,attempt_id,item_id,source_blob_ref,language,source_hash,status,created_at)`
+`judge_runs(id,organization_id,submission_id,runner_version,test_suite_version,resource_usage_json,result_json,status,finished_at)`
+`files(id,organization_id,blob_key,sha256,size,mime,owner,virus_scan_status,retention_at)`
+`backup_catalog(id,storage_target,type,start_at,finish_at,size,status,verified_restore_at,chain_id,protected_until)`
+`storage_cleanup_jobs(id,scope,requested_by,dry_run_report,approved_by,status,bytes_freed,created_at)`
+`retention_policies(id,organization_id,incident_days,technical_days,audit_days,...)`
+
+## Database invariants/constraints
+- `unique(organization_id, student_membership_id, assignment_id, attempt_number)` and transactional attempt reservation.
+- `CHECK` (submitted_at >= started_at) where appropriate; `CHECK` grade <= max_points, no negative points unless explicit penalty policy.
+- Attempt status transitions validated in domain service and guarded by optimistic `version`/row locks.
+- `question_versions` and `assessment_publications` immutable once published. Do not modify frozen reference even after bank deletion.
+- No device can have two `active` proctoring sessions; DB partial unique index with status active, plus heartbeat expiry reconciliation.
+- Tokens (`invites`, `enrollments`, `pairings`) stored only as hashes. Never reuse credential across organizations.
+- Automatically purge expired incident partitions/records according to policy; audit purge policy separate.
+
+## Migration sequence
+1. identity, membership, organization RBAC; 2. academic; 3. banks/questions; 4. publications/assignments; 5. attempts/answers/grading; 6. agent/proctoring; 7. judge; 8. audit and backup catalogs; 9. indexes, RLS hardening. All migrations tested fresh DB and upgrade from previous revision.
+
+Foundation 1a включает ревизию Alembic `0001` с базовыми таблицами
+`organizations` и `users`. Связь с политикой хранения, memberships, роли,
+разрешения и сессии добавляются отдельными ревизиями. Downgrade в `base`
+удаляет обе таблицы и предназначен для проверок на одноразовой БД.
