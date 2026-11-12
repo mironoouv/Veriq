@@ -42,3 +42,7 @@
 
 - Auth Slice 8 принят. [PR #18](https://github.com/mironoouv/Veriq/pull/18) объединён squash-коммитом `034df5ad61b1e54b3d878123738469b640bc162a`. Локальный main синхронизирован, ревизия `0015` подтверждена, [CI на main](https://github.com/mironoouv/Veriq/actions/runs/43300660179) прошёл. Расширенный timing-анализ, нагрузка и production-политики остаются открытыми.
 - Slice 9 в ветке `feature/auth-09-security-e2e`: воспроизводимый HTTPS Chromium, проверка закрытых Auth-маршрутов production и [Security Validation Report](../AUTH_SECURITY_VALIDATION.md). Production Auth — NOT READY. Следующие продуктовые этапы ждут ревью.
+
+- Auth Slice 1–9 завершены в согласованном тестовом объёме. [PR #19](https://github.com/mironoouv/Veriq/pull/19) объединён squash-коммитом `d4f6365b6178b336af8c22666d2e1a5517a70a7d`. Main синхронизирован, миграция `0015` присутствует. [CI на main](https://github.com/mironoouv/Veriq/actions/runs/43304633627).
+- Public Auth = NOT READY. Публичные Auth endpoints выключены. [Открытые задачи](KNOWN_ISSUES.md) и [Security Validation Report](../AUTH_SECURITY_VALIDATION.md).
+- Следующий этап по ROADMAP — Academic & Studio. [План](../../planning/ACADEMIC_STUDIO.md) имеет статус PROPOSED. Код новой подсистемы ждёт архитектурного ревью.
