@@ -2,10 +2,12 @@ import argparse
 import asyncio
 import logging
 import signal
+from collections.abc import Awaitable
 from pathlib import Path
 from threading import Event
 from time import time
 from types import FrameType
+from typing import cast
 from uuid import UUID
 
 from redis.exceptions import RedisError
@@ -60,7 +62,9 @@ async def main() -> int:
             if not processed:
                 try:
                     async with asyncio.timeout(2):
-                        await redis.execute_command("BLPOP", WAKE_QUEUE, 1)
+                        await cast(
+                            Awaitable[object], redis.blpop([WAKE_QUEUE], timeout=1)
+                        )
                 except (RedisError, TimeoutError):
                     stopped.wait(1)
         HEARTBEAT.unlink(missing_ok=True)
