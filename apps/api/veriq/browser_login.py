@@ -3,13 +3,15 @@
 import asyncio
 import hmac
 import os
+import re
 import secrets
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
-from argon2.exceptions import InvalidHashError, VerificationError
+from argon2 import Type, extract_parameters
+from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict, Field
 from redis.asyncio import Redis
@@ -26,9 +28,10 @@ from veriq.auth_rate_limit import (
     LimitBudget,
     trusted_client_ip,
 )
+from veriq.password_work import PasswordCapacityExceeded, PasswordWork
 from veriq.registration import Signup, _body_schema, _error, _payload
 from veriq.registration_policy import HASHER, canonical_email
-from veriq.sessions import Sessions, SessionToken
+from veriq.sessions import MfaRequired, Sessions, SessionToken
 from veriq.tenant_access import AccessDenied
 
 SESSION = "__Host-veriq-session"
@@ -50,6 +53,30 @@ class Candidate:
     user_id: UUID
     version: int
     password_hash: str = field(repr=False)
+    replacement: str | None = field(default=None, repr=False)
+
+
+_PHC = re.compile(
+    r"\$argon2id\$v=19\$m=\d{1,6},t=\d{1,2},p=\d{1,2}\$[A-Za-z0-9+/]+\$[A-Za-z0-9+/]+"
+)
+
+
+def supported_hash(value: str) -> bool:
+    if len(value) > 256 or _PHC.fullmatch(value) is None:
+        return False
+    try:
+        profile = extract_parameters(value)
+    except InvalidHashError:
+        return False
+    return (
+        profile.type is Type.ID
+        and 1 <= profile.parallelism <= 4
+        and 1 <= profile.time_cost <= 4
+        and 8 * profile.parallelism <= profile.memory_cost <= 65536
+        and profile.time_cost * profile.memory_cost <= 196608
+        and 8 <= profile.salt_len <= 32
+        and 16 <= profile.hash_len <= 64
+    )
 
 
 class PasswordLogin:
@@ -69,19 +96,23 @@ class PasswordLogin:
             else Candidate(row.id, row.credential_version, row.password_hash)
         )
         normalized = unicodedata.normalize("NFC", password)
-        stored = self.dummy
-        if candidate is not None:
+        if candidate is not None and supported_hash(candidate.password_hash):
             try:
-                if not HASHER.check_needs_rehash(candidate.password_hash):
-                    stored = candidate.password_hash
-            except (InvalidHashError, VerificationError):
+                HASHER.verify(candidate.password_hash, normalized)
+            except VerifyMismatchError:
+                return None
+            except (InvalidHashError, VerificationError, UnicodeError):
                 pass
-        valid: bool
+            else:
+                if HASHER.check_needs_rehash(candidate.password_hash):
+                    return replace(candidate, replacement=HASHER.hash(normalized))
+                return candidate
+
         try:
-            valid = HASHER.verify(stored, normalized)
-        except (InvalidHashError, VerificationError, UnicodeError):
-            valid = False
-        return candidate if valid and stored != self.dummy else None
+            HASHER.verify(self.dummy, normalized)
+        except (VerificationError, UnicodeError):
+            pass
+        return None
 
 
 def login_enabled() -> bool:
@@ -130,7 +161,9 @@ def browser_router(
     )
     passwords = PasswordLogin(CredentialVerifier(verifier))
     sessions = Sessions(engine, issuer=issuer)
-    active: set[asyncio.Task[Candidate | None]] = set()
+    work = PasswordWork[Candidate | None](
+        int(os.environ.get("VERIQ_TEST_LOGIN_HASH_CONCURRENCY", "2"))
+    )
     router = APIRouter(prefix="/api/v1", tags=["auth-test"])
 
     def same_origin(request: Request) -> bool:
@@ -194,34 +227,28 @@ def browser_router(
             rejected.headers.update(HEADERS)
             return rejected
 
-        if len(active) >= 2:
-            return _error(context, "SERVICE_UNAVAILABLE", 503)
-
-        def complete(task: asyncio.Task[Candidate | None]) -> None:
-            active.discard(task)
-            if not task.cancelled():
-                task.exception()
-
         def issue(candidate: Candidate) -> SessionToken:
             proof = passwords.verifier.confirm_password(
                 candidate.user_id,
                 candidate.version,
                 organization_id=data.organization_id,
+                expected_hash=candidate.password_hash,
+                replacement=candidate.replacement,
+                context=context,
             )
-            return sessions.issue(proof, context=context)
+            return sessions.issue(proof, context=context, browser=True)
 
         try:
-            task = asyncio.create_task(
-                asyncio.to_thread(
-                    passwords.check, email, data.password.get_secret_value()
-                )
+            candidate = await work.run(
+                lambda: passwords.check(email, data.password.get_secret_value())
             )
-            active.add(task)
-            task.add_done_callback(complete)
-            candidate = await asyncio.shield(task)
             if candidate is None:
                 raise AccessDenied
             token = await asyncio.to_thread(issue, candidate)
+        except PasswordCapacityExceeded:
+            return _error(context, "SERVICE_UNAVAILABLE", 503)
+        except MfaRequired:
+            return _error(context, "INVALID_CREDENTIALS", 401)
         except AccessDenied:
             try:
                 await asyncio.to_thread(_audit, engine, context, AuthResult.DENIED)
@@ -312,6 +339,7 @@ def browser_router(
                 sessions.rotate,
                 SessionToken(request.cookies.get(SESSION, "")),
                 organization_id=data.organization_id,
+                context=context,
             )
         except AccessDenied:
             return _error(context, "SESSION_OR_SCOPE_DENIED", 401)

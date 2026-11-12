@@ -98,6 +98,10 @@ class SessionIdentity:
     mfa_level: MfaLevel
 
 
+class MfaRequired(AccessDenied):
+    """The password was verified, but the chosen scope requires MFA."""
+
+
 class Sessions:
     def __init__(
         self,
@@ -118,7 +122,11 @@ class Sessions:
                 yield connection
 
     def issue(
-        self, proof: CredentialProof, *, context: RequestContext | None = None
+        self,
+        proof: CredentialProof,
+        *,
+        context: RequestContext | None = None,
+        browser: bool = False,
     ) -> SessionToken:
         """Redeem a short-lived proof produced by the trusted verifier."""
         if self.issuer is None:
@@ -126,10 +134,11 @@ class Sessions:
         token = SessionToken.generate()
         gate = token._gate(self.policy)
         context = context or RequestContext.new()
+        issue_function = "veriq_browser_issue" if browser else "veriq_auth_issue"
         with self._transaction(self.issuer) as connection:
             accepted = connection.execute(
-                text("""
-                    SELECT public.veriq_auth_issue(
+                text(f"""
+                    SELECT public.{issue_function}(
                         :proof, :proof_hash, :id, :digest, CAST(:limits AS interval[]),
                         :event, :request, :correlation
                     )
@@ -145,8 +154,10 @@ class Sessions:
                     "limits": list(gate.limits),
                 },
             ).scalar_one()
-            if not accepted:
-                raise AccessDenied
+        if accepted == "mfa_required":
+            raise MfaRequired
+        if accepted is not True and accepted != "issued":
+            raise AccessDenied
         return token
 
     def resolve(self, token: SessionToken) -> SessionIdentity:
@@ -155,14 +166,22 @@ class Sessions:
             return self._use(connection, gate)
 
     def rotate(
-        self, token: SessionToken, *, organization_id: UUID | None
+        self,
+        token: SessionToken,
+        *,
+        organization_id: UUID | None,
+        context: RequestContext | None = None,
     ) -> SessionToken:
         """Rotate after selecting a tenant, including reselecting the same tenant or clearing it."""
         previous = token._gate(self.policy)
         replacement = SessionToken.generate()
         with self._transaction() as connection:
             self._use(
-                connection, previous, replacement._gate(self.policy), organization_id
+                connection,
+                previous,
+                replacement._gate(self.policy),
+                organization_id,
+                context,
             )
         return replacement
 
@@ -215,14 +234,25 @@ class Sessions:
         gate: SessionGate,
         replacement: SessionGate | None = None,
         target: UUID | None = None,
+        context: RequestContext | None = None,
     ) -> SessionIdentity:
+        function = "veriq_session_use"
+        arguments = (
+            ":id, :digest, CAST(:limits AS interval[]), :next_id, :next_digest, :target"
+        )
+        audit: dict[str, UUID] = {}
+        if context is not None:
+            function = "veriq_browser_rotate"
+            arguments += ", :event, :request, :correlation"
+            audit = {
+                "event": uuid4(),
+                "request": context.request_id,
+                "correlation": context.correlation_id,
+            }
         row = connection.execute(
-            text("""
-                SELECT * FROM public.veriq_session_use(
-                    :id, :digest, CAST(:limits AS interval[]), :next_id, :next_digest, :target
-                )
-            """),
+            text(f"SELECT * FROM public.{function}({arguments})"),
             {
+                **audit,
                 "id": gate.session_id,
                 "digest": gate.digest,
                 "limits": list(gate.limits),

@@ -23,6 +23,7 @@ from urllib.request import Request, urlopen
 from uuid import uuid4
 
 import uvicorn
+from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from cryptography import x509
 from cryptography.fernet import Fernet
@@ -33,9 +34,13 @@ from psycopg import Connection as PsycopgConnection
 from psycopg import sql
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.exc import DBAPIError
+from veriq.auth_audit import RequestContext
+from veriq.auth_credentials import CredentialVerifier
+from veriq.browser_login import PasswordLogin
 from veriq.database import database_url
 from veriq.main import create_app
 from veriq.registration_policy import HASHER
+from veriq.tenant_access import AccessDenied
 from veriq.verification_mail import LocalMailbox, deliver_verification
 
 INITIAL = "synthetic pre-verification passphrase"
@@ -392,12 +397,22 @@ def browser_checks(
         org=organization,
         user=user_id,
     )
+    older = PasswordHasher(memory_cost=19456, time_cost=2, parallelism=1).hash(FINAL)
+    query(
+        owner,
+        "UPDATE users SET password_hash=:hash WHERE id=:id RETURNING 1",
+        hash=older,
+        id=user_id,
+    )
     status, _, cookies = request(
         "/auth/login",
         method="POST",
         data={**credentials, "organization_id": str(organization)},
     )
     assert status == 204
+    upgraded = query(owner, "SELECT password_hash FROM users WHERE id=:id", id=user_id)
+    assert upgraded != older and HASHER.verify(upgraded, FINAL)
+    assert not HASHER.check_needs_rehash(upgraded)
     session_cookie = session_value(cookies)
     status, payload, _ = request("/me")
     assert status == 200 and json.loads(payload)["organization_id"] == str(organization)
@@ -464,6 +479,44 @@ def browser_checks(
         )
         == 0
     )
+    with owner.connect() as connection:
+        phases = connection.execute(
+            text("""
+                SELECT e.result, array_agg(a.event_type ORDER BY a.event_type) AS types
+                FROM auth_audit_events AS e
+                JOIN auth_audit_events AS a USING (request_id, correlation_id)
+                WHERE e.target_id = :user AND e.event_type IN ('session_issued', 'login_mfa_required')
+                GROUP BY e.id
+                """),
+            {"user": user_id},
+        ).all()
+    assert (
+        sum(
+            row.types == ["password_verified", "session_issued"]
+            and row.result == "succeeded"
+            for row in phases
+        )
+        == 2
+    )
+    assert (
+        sum(
+            row.types == ["login_mfa_required", "password_verified"]
+            and row.result == "denied"
+            for row in phases
+        )
+        == 1
+    )
+    assert (
+        query(
+            owner,
+            """
+        SELECT count(*) FROM auth_audit_events
+        WHERE target_id=:user AND event_type='session_rotated' AND result='succeeded'
+        """,
+            user=user_id,
+        )
+        == 1
+    )
     print(
         "Browser login: TLS, credential denials, tenant/MFA, CSRF, cookies, rotation and logout passed."
     )
@@ -497,6 +550,89 @@ def tls_fixture(root: Path) -> tuple[Path, Path, ssl.SSLContext]:
         )
     )
     return certfile, keyfile, ssl.create_default_context(cafile=str(certfile))
+
+
+def rehash_race(owner: Engine, verifier: CredentialVerifier) -> None:
+    account = uuid4()
+    email = f"rehash-race-{account.hex}@example.invalid"
+    old = PasswordHasher(memory_cost=19456, time_cost=2, parallelism=1).hash(FINAL)
+    new = HASHER.hash("synthetic replacement credential")
+    query(
+        owner,
+        """INSERT INTO users (id, email_normalized, email_verified_at, password_hash)
+           VALUES (:id, :email, now(), :hash) RETURNING id""",
+        id=account,
+        email=email,
+        hash=old,
+    )
+    passwords = PasswordLogin(verifier)
+    candidate = passwords.check(email, FINAL)
+    assert candidate is not None and candidate.replacement is not None
+    assert HASHER.verify(candidate.replacement, FINAL)
+    assert passwords.check(email, INITIAL) is None
+    assert passwords.check("unknown-rehash@example.invalid", FINAL) is None
+
+    def confirm() -> None:
+        verifier.confirm_password(
+            candidate.user_id,
+            candidate.version,
+            organization_id=None,
+            expected_hash=candidate.password_hash,
+            replacement=candidate.replacement,
+            context=RequestContext.new(),
+        )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with owner.begin() as connection:
+            connection.execute(
+                text(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(CAST(:id AS text), 7007))"
+                ),
+                {"id": account},
+            )
+            connection.execute(
+                text("""
+                UPDATE users SET password_hash = :hash, credential_version = credential_version + 1
+                WHERE id = :id
+            """),
+                {"id": account, "hash": new},
+            )
+            result = executor.submit(confirm)
+            try:
+                result.result(timeout=0.2)
+            except TimeoutError:
+                pass
+            else:
+                raise AssertionError("Password confirmation bypassed the account lock")
+        try:
+            result.result(timeout=10)
+        except AccessDenied:
+            pass
+        else:
+            raise AssertionError(
+                "Stale password confirmation survived credential change"
+            )
+
+    assert (
+        query(owner, "SELECT password_hash FROM users WHERE id=:id", id=account) == new
+    )
+    assert (
+        query(owner, "SELECT credential_version FROM users WHERE id=:id", id=account)
+        == candidate.version + 1
+    )
+    assert (
+        query(
+            owner,
+            "SELECT count(*) FROM auth_credential_proofs WHERE user_id=:id",
+            id=account,
+        )
+        == 0
+    )
+    assert passwords.check(email, FINAL) is None
+    assert passwords.check(email, "synthetic replacement credential") is not None
+    print(
+        "Argon2id race: concurrent password change preserved the replacement credential and blocked stale proof."
+    )
 
 
 def provision_browser_roles(owner: Engine) -> None:
@@ -611,6 +747,17 @@ def main() -> None:
                     assert_denial(restricted, "SELECT password_hash FROM users")
                 finally:
                     restricted.dispose()
+            verifier_engine = create_engine(
+                url.set(
+                    username="veriq_password_verifier",
+                    password=os.environ["VERIQ_TEST_LOGIN_VERIFIER_PASSWORD"],
+                ),
+                hide_parameters=True,
+            )
+            try:
+                rehash_race(owner, CredentialVerifier(verifier_engine))
+            finally:
+                verifier_engine.dispose()
             os.environ["VERIQ_ENABLE_TEST_LOGIN"] = "1"
             os.environ["VERIQ_TEST_CSRF_KEY"] = secrets.token_hex(32)
             certfile, keyfile, tls = tls_fixture(root)
