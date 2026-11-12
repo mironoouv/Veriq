@@ -6,13 +6,14 @@ import signal
 from collections.abc import Awaitable
 from pathlib import Path
 from threading import Event
-from time import time
+from time import monotonic, time
 from types import FrameType
 from typing import cast
 from uuid import UUID
 
 from cryptography.fernet import Fernet
 from redis.exceptions import RedisError
+from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from veriq.database import create_database_engine
@@ -70,9 +71,15 @@ async def main() -> int:
         signal.signal(signal.SIGTERM, stop)
         signal.signal(signal.SIGINT, stop)
         HEARTBEAT.unlink(missing_ok=True)
+        purge_after = monotonic()
         while not stopped.is_set():
             try:
                 processed = process_next(engine)
+                if monotonic() >= purge_after:
+                    with engine.begin() as connection:
+                        connection.exec_driver_sql("SET LOCAL statement_timeout='2s'")
+                        connection.execute(text("SELECT public.veriq_import_purge()"))
+                    purge_after = monotonic() + 60
                 if cipher is not None and mailbox is not None:
                     processed = (
                         deliver_verification(engine, cipher, mailbox) or processed

@@ -195,3 +195,23 @@ trigger. It serializes onboarding changes with authority revocation globally;
 evaluate contention before public use. Applicant membership transitions and
 audit commit together. Issued secrets are returned once for separate delivery.
 There is no mail delivery or classroom integration in this slice.
+
+### Bulk import resource and trust boundary
+
+The loopback test overlay enables bulk imports. Two uploads per API process may
+read or parse at once. Limits are 256 KiB on the wire, 500 data rows, 32 columns,
+32 ZIP entries, 2 MiB declared uncompressed XLSX content, five seconds for
+upload and two seconds for the bounded parser. XLSX accepts one worksheet,
+reads string values only for email mapping, and rejects formula cells,
+external relationships, VBA parts, XML entity declarations and unsupported ZIP
+compression. Raw files stay in bounded memory. Reports are JSON, so the API
+does not put spreadsheet formulas in a CSV export.
+
+Only veriq_api can call the operation-specific definer. It verifies the live
+session and bound tenant and restores the function-local RLS setting on return.
+Staff upload, confirm and result require current permission and fresh MFA.
+PostgreSQL serializes confirmation against authority changes with the existing
+global advisory guard. The API applies a five-second statement timeout and
+two-second lock timeout. The worker receives only the bounded expiry cleanup
+function, so Redis downtime does not prevent removal of expired staged data.
+Larger batches and production concurrency need separate performance validation.

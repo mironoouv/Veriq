@@ -132,3 +132,23 @@ organization.join.manage permission, and a sensitive step-up within 5 minutes.
 A known organization UUID alone cannot be used to apply unless staff opened
 intake explicitly. Invalid scope, expired or revoked secrets and forbidden
 transitions return the same JOINING_DENIED response.
+
+## Auth Slice 8 (test HTTPS)
+
+POST /api/v1/organizations/{organization_id}/imports/{action} uses the
+existing Secure/HttpOnly session cookie, exact Origin, CSRF and Redis limits.
+
+| Action | Input | Result |
+|---|---|---|
+| preview | Raw text/csv (UTF-8/BOM) or XLSX MIME body; optional email_column query | Batch ID, immutable version, expiry, counts and per-row normalized email/state |
+| confirm | JSON batch_id and version from preview | Idempotent confirmation and row outcomes |
+| result | JSON batch_id | Current report, restricted to the batch creator |
+| claim | JSON batch_id | Pending membership and join request for a verified matching account |
+
+Staff actions require organization.import.manage in the session tenant and a
+fresh sensitive MFA step-up. Confirm rechecks both and recalculates results
+against current account and membership state. Preview and reports return JSON
+only. Confirmed reports contain row numbers, state and any created request ID.
+Valid states distinguish existing and inactive membership, unavailable account,
+new address awaiting verification, created membership and verified claim.
+Invalid email, unexpected columns and in-file duplicates have row-level codes.
