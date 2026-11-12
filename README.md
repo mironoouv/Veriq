@@ -28,6 +28,7 @@
 | `docs/adr/` | ADR-001—ADR-016 |
 | `planning/ROADMAP.md` | Очередность реализации и контрольные точки |
 | `planning/IMPLEMENTATION.md` | Технический план, архитектурные риски и предложения для ADR |
+| `docs/project-memory/PROJECT_STATE.md` | Текущее состояние, ревью и вход в проектный контекст |
 | `planning/TASKS.md` | Задачи первого спринта, готовые для агента |
 | `AGENTS.md` | Правила поведения ИИ-агента |
 | `schemas/` | Пример структурной модели и OpenAPI-заготовка |
@@ -50,7 +51,7 @@
 
 **ВНИМАНИЕ:** версии зависимостей и точные параметры портов фиксируются на этапе внедрения с security review; в примерах нет реальных секретов.
 
-## Локальный запуск Foundation 1a
+## Локальный запуск Foundation
 
 Требуются Docker Desktop в режиме Linux Containers с WSL 2, Docker Compose v2
 или новее и Python 3.11 для генерации локального пароля и запуска проверок.
@@ -78,8 +79,8 @@ docker compose -f compose.yaml -f compose.dev.yaml exec -T api alembic current -
 python tests/smoke.py
 ```
 
-Откройте [Veriq](http://localhost:5173). Страница проверяет доступность API и
-PostgreSQL. В локальном режиме доступна [OpenAPI](http://localhost:5173/api/v1/docs).
+Откройте [Veriq](http://localhost:5173). Страница проверяет доступность API,
+PostgreSQL и Redis. В локальном режиме доступна [OpenAPI](http://localhost:5173/api/v1/docs).
 Для нестандартного порта укажите `VERIQ_WEB_PORT` в `.env` и в окружении
 перед запуском `tests/smoke.py`.
 
@@ -110,6 +111,8 @@ npm --prefix apps/web run build
 в следующих срезах Foundation.
 
 ## Статус разработки
+
+Foundation 1b добавляет Redis и отдельный процесс фоновых задач. См. [устройство очереди и проверку восстановления](services/worker/README.md).
 
 Foundation 1a включает Vue 3 / TypeScript, FastAPI, SQLAlchemy, Alembic и PostgreSQL.
 Веб-интерфейс обращается к API через Vite proxy. Миграции и переход готовности API

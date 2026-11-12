@@ -1,6 +1,17 @@
 # AI DEVELOPMENT CONTRACT — VERIQ
 
-You are implementing a multi-tenant, exam-critical security-sensitive platform. Read `README.md`, `docs/DECISIONS.md`, `docs/VERIQ_SPEC.md`, `docs/SECURITY.md`, `docs/OPEN_QUESTIONS.md`, `planning/ROADMAP.md` **before coding**.
+You are implementing a multi-tenant, exam-critical security-sensitive platform.
+
+## Session protocol
+
+At the start of a new session:
+
+1. Read this file, [PROJECT_STATE](docs/project-memory/PROJECT_STATE.md) and [SESSION_HANDOFF](docs/project-memory/SESSION_HANDOFF.md) in that order.
+2. Verify the Git branch, HEAD, working tree and relevant open PRs.
+3. Use [CONTEXT_INDEX](docs/project-memory/CONTEXT_INDEX.md) to load the relevant sections of the specification, security design, decisions, open questions and roadmap. Read the README when changing setup or deployment.
+4. Reconcile discrepancies among project memory, Git and the specification before implementing changes. Git and running code establish implementation state, approved ADRs establish architecture decisions, and the specification establishes product requirements. Project memory summarizes and links to these sources.
+
+At the end of substantive work, run the relevant tests and update only the affected memory entries. Report changes, unverified results, and commit and PR links. Distinguish local checks from CI and agent fixes from owner approval. Keep credentials and personal data out of memory. Avoid automatic recurring summaries. If context grows too large or contradictory, refresh SESSION_HANDOFF and recommend a clean session.
 
 ## Non-negotiable rules
 1. Do not reinterpret APPROVED requirements. For contradictions propose ADR and flag rather than quietly change.
