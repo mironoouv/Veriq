@@ -1,6 +1,6 @@
 # Auth & Account Security
 
-**APPROVED с уточнениями. Реализация разрешена для Slice 1. Следующие срезы требуют отдельного ревью.** Основание: [ТЗ](../docs/VERIQ_SPEC.md), [SECURITY](../docs/SECURITY.md), [DATABASE](../docs/DATABASE.md), [API_CONTRACTS](../docs/API_CONTRACTS.md), [ADR-003](../docs/adr/ADR-003-onboarding.md), [ADR-014](../docs/adr/ADR-014-mfa.md), [ADR-015](../docs/adr/ADR-015-mfa-recovery.md), [AUTH-01–03 и TEN-01](../docs/ACCEPTANCE.md). Пути ниже относительны к `/api/v1`. Новые маршруты и поля — предложения к OpenAPI; действующие ADR сохраняются.
+**APPROVED с уточнениями. Slice 1 принят, реализация Slice 2 разрешена. Следующие срезы требуют отдельного ревью.** Основание: [ТЗ](../docs/VERIQ_SPEC.md), [SECURITY](../docs/SECURITY.md), [DATABASE](../docs/DATABASE.md), [API_CONTRACTS](../docs/API_CONTRACTS.md), [ADR-003](../docs/adr/ADR-003-onboarding.md), [ADR-014](../docs/adr/ADR-014-mfa.md), [ADR-015](../docs/adr/ADR-015-mfa-recovery.md), [AUTH-01–03 и TEN-01](../docs/ACCEPTANCE.md). Пути ниже относительны к `/api/v1`. Новые маршруты и поля — предложения к OpenAPI; действующие ADR сохраняются.
 
 ## Границы доверия
 

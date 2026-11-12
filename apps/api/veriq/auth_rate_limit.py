@@ -33,6 +33,8 @@ return 0
 
 class AuthCategory(StrEnum):
     REGISTRATION = "registration"
+    EMAIL_VERIFY = "email_verify"
+    EMAIL_RESEND = "email_resend"
     LOGIN = "login"
     MFA = "mfa"
     PASSWORD_RESET = "password_reset"

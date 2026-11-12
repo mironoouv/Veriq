@@ -14,6 +14,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from veriq.database import create_database_engine
 from veriq.redis_client import create_redis, ping_redis
+from veriq.registration import registration_enabled, registration_router
 
 
 class Health(BaseModel):
@@ -93,5 +94,8 @@ def create_app(
                 headers={"Cache-Control": "no-store"},
             )
         return Health()
+
+    if cache is not None and registration_enabled():
+        app.include_router(registration_router(database, cache))
 
     return app

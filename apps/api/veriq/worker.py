@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import logging
+import os
 import signal
 from collections.abc import Awaitable
 from pathlib import Path
@@ -10,12 +11,15 @@ from types import FrameType
 from typing import cast
 from uuid import UUID
 
+from cryptography.fernet import Fernet
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 
 from veriq.database import create_database_engine
 from veriq.jobs import WAKE_QUEUE, enqueue_probe, process_next
 from veriq.redis_client import create_redis
+from veriq.registration import registration_enabled
+from veriq.verification_mail import LocalMailbox, deliver_verification
 
 HEARTBEAT = Path("/tmp/veriq-worker-heartbeat")
 LOG = logging.getLogger(__name__)
@@ -43,6 +47,11 @@ async def main() -> int:
             await enqueue_probe(engine, redis, args.id)
             return 0
 
+        cipher = mailbox = None
+        if registration_enabled():
+            cipher = Fernet(os.environ["VERIQ_TEST_MAIL_KEY"].encode("ascii"))
+            mailbox = LocalMailbox(Path(os.environ["VERIQ_TEST_MAILBOX"]))
+
         stopped = Event()
 
         def stop(signum: int, frame: FrameType | None) -> None:
@@ -54,6 +63,10 @@ async def main() -> int:
         while not stopped.is_set():
             try:
                 processed = process_next(engine)
+                if cipher is not None and mailbox is not None:
+                    processed = (
+                        deliver_verification(engine, cipher, mailbox) or processed
+                    )
                 HEARTBEAT.touch()
             except SQLAlchemyError:
                 LOG.warning("Background database operation unavailable")

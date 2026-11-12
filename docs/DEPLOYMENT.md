@@ -92,3 +92,17 @@ Forward `Upgrade` headers for WebSocket, proper proxy timeouts, keepalive, reque
 - Verify SMTP for registration/2FA recovery, malware scan uploads, object storage rights/retention, agent MSI signing, cron/worker retention health.
 - Real performance tests on 30 clients and exercises for large files/timeout.
 - Security/legal review before handling real student records.
+
+
+## Локальная регистрация и почта
+
+Используйте отдельный Compose-проект и тестовые адреса. Подготовьте выделенные пароли БД по стандартной инструкции, локальный файл SHA-256 блоклиста, случайный отдельный Fernet-ключ и 32-байтный HMAC-ключ в hex. Передайте `VERIQ_TEST_PASSWORD_BLOCKLIST`, `VERIQ_TEST_MAIL_KEY` и `VERIQ_TEST_AUTH_HMAC_KEY` через локальное окружение. Файл блоклиста должен быть читаем пользователем контейнера. Ключи хранятся вне Git и не выводятся в логи. Тестовый overlay публикует API только на `127.0.0.1:18000` и хранит письма в закрытом tmpfs worker.
+
+```powershell
+docker compose -p veriq-registration-test -f compose.yaml -f compose.registration-test.yaml config --quiet
+docker compose -p veriq-registration-test -f compose.yaml -f compose.registration-test.yaml up --build --wait
+```
+
+Найдите тестовый JSON по UUID в `/run/veriq/mailbox` внутри worker. Для ручной проверки открывайте его только в приватном локальном окружении. При открытии пути из сообщения добавьте origin `http://127.0.0.1:18000`. Содержимое mailbox исчезает при остановке контейнера. Тестовый транспорт не отправляет писем во внешние системы. Для остановки используйте `down` с теми же параметрами проекта.
+
+До включения настоящей доставки по OQ-12 согласуйте провайдера, TLS с проверкой сертификата, исходящий порт, аутентификацию через secret store, домен отправителя и SPF/DKIM/DMARC. Закрепите отдельный доверенный HTTPS origin для ссылок, выключите click tracking, согласуйте таймауты и повторы, ключ идемпотентности и ротацию ключей конвертов. Перед публичным включением требуется пройти остальные этапы Auth и оценить тайминги перечисления аккаунтов и злоупотребление resend.
