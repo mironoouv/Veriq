@@ -131,34 +131,47 @@ class Sessions:
         """Redeem a short-lived proof produced by the trusted verifier."""
         if self.issuer is None:
             raise AccessDenied
-        token = SessionToken.generate()
-        gate = token._gate(self.policy)
         context = context or RequestContext.new()
-        issue_function = "veriq_browser_issue" if browser else "veriq_auth_issue"
         with self._transaction(self.issuer) as connection:
-            accepted = connection.execute(
-                text(f"""
-                    SELECT public.{issue_function}(
-                        :proof, :proof_hash, :id, :digest, CAST(:limits AS interval[]),
-                        :event, :request, :correlation
-                    )
-                """),
-                {
-                    "id": gate.session_id,
-                    "proof": proof.id,
-                    "proof_hash": proof.digest,
-                    "event": uuid4(),
-                    "request": context.request_id,
-                    "correlation": context.correlation_id,
-                    "digest": gate.digest,
-                    "limits": list(gate.limits),
-                },
-            ).scalar_one()
+            token, accepted = self._issue_on(
+                connection, proof, context, browser=browser
+            )
         if accepted == "mfa_required":
             raise MfaRequired
         if accepted is not True and accepted != "issued":
             raise AccessDenied
         return token
+
+    def _issue_on(
+        self,
+        connection: Connection,
+        proof: CredentialProof,
+        context: RequestContext,
+        *,
+        browser: bool = False,
+    ) -> tuple[SessionToken, object]:
+        token = SessionToken.generate()
+        gate = token._gate(self.policy)
+        issue_function = "veriq_browser_issue" if browser else "veriq_auth_issue"
+        accepted = connection.execute(
+            text(f"""
+                SELECT public.{issue_function}(
+                    :proof, :proof_hash, :id, :digest, CAST(:limits AS interval[]),
+                    :event, :request, :correlation
+                )
+            """),
+            {
+                "id": gate.session_id,
+                "proof": proof.id,
+                "proof_hash": proof.digest,
+                "event": uuid4(),
+                "request": context.request_id,
+                "correlation": context.correlation_id,
+                "digest": gate.digest,
+                "limits": list(gate.limits),
+            },
+        ).scalar_one()
+        return token, accepted
 
     def resolve(self, token: SessionToken) -> SessionIdentity:
         gate = token._gate(self.policy)

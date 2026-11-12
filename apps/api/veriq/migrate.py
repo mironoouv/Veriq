@@ -23,6 +23,9 @@ def main() -> None:
         credentials.update(
             veriq_password_verifier=verifier, veriq_browser_issuer=issuer
         )
+    mfa = os.environ.get("VERIQ_TEST_MFA_DB_PASSWORD", "")
+    if mfa:
+        credentials["veriq_mfa_verifier"] = mfa
     if (
         "" in credentials.values()
         or len({*credentials.values(), os.environ["VERIQ_DB_PASSWORD"]})
