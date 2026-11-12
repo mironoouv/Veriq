@@ -12,6 +12,7 @@
 - Authorization: permission + org + resource relationship + action-specific policy, server side. Superadmin has infrastructure management, not silent universal answer/screen access; exceptional break-glass audited, time limited, approved where possible.
 - Deny by default; RLS/tenant composite FK; automated cross-tenant IDOR tests for all CRUD/websocket/media endpoints, including attachments.
 - Slice B stores platform and organization grants separately. A Superadmin assignment alone yields no organization permissions. Internal grant readers check live membership state and expect an already verified subject. Resource authorization remains a separate check. Slice B exposes no public or user-context role writer. A future writer must reject self-elevation and verify the actor, target, scope, step-up and audit before exposure.
+- PostgreSQL advances the membership grant epoch when status becomes revoked. Assignment and revocation serialize on the membership row. Current reads require matching epochs, so reactivation requires explicit new assignments. Suspension keeps the epoch and allows restoration on activation. An authorization check must use a current database snapshot. Previous results, including those from an already open snapshot, must not be reused across requests.
 
 ## Agent security
 - Agent service has device identity; initial deployment token limited to org, TTL and quota, admin approval. Key generated per device; protect at rest (Windows machine key store/DPAPI) and pin server trust with ordinary certificate validation, no bypass TLS.

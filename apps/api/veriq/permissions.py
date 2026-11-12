@@ -17,6 +17,7 @@ def organization_permission_codes(
             JOIN membership_roles AS assignment
               ON assignment.organization_id = membership.organization_id
              AND assignment.membership_id = membership.id
+             AND assignment.grant_epoch = membership.grant_epoch
             JOIN organization_role_permissions AS grants
               ON grants.organization_id = assignment.organization_id
              AND grants.role_id = assignment.role_id

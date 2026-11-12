@@ -71,6 +71,8 @@ def main() -> None:
         scratch(database_name, "python", "-", "seed", stdin=checks)
         scratch(database_name, "alembic", "upgrade", "0003")
         scratch(database_name, "python", "-", "upgrade", stdin=checks)
+        scratch(database_name, "alembic", "upgrade", "0004")
+        scratch(database_name, "python", "-", "legacy-grants", stdin=checks)
         scratch(database_name, "alembic", "upgrade", "head")
         scratch(database_name, "alembic", "current", "--check-heads")
         compose("restart", "postgres")
@@ -79,7 +81,7 @@ def main() -> None:
     finally:
         database(f"DROP DATABASE {database_name}")
     print(
-        "Identity smoke: fresh install, 0002–0004 upgrades, constraints, role scopes and PostgreSQL restart passed."
+        "Identity smoke: fresh install, upgrades through 0005, grant revocation and PostgreSQL restart passed."
     )
 
 
