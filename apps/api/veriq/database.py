@@ -14,9 +14,9 @@ def database_url() -> URL:
     )
 
 
-def create_database_engine() -> Engine:
+def create_database_engine(url: URL | None = None) -> Engine:
     return create_engine(
-        database_url(),
+        url if url is not None else database_url(),
         pool_pre_ping=True,
         hide_parameters=True,
         connect_args={"connect_timeout": 2},

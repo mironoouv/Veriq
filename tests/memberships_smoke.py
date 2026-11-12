@@ -122,6 +122,7 @@ def main() -> None:
         scratch(database_name, "alembic", "upgrade", "0006")
         scratch(database_name, "alembic", "upgrade", "0007")
         scratch(database_name, "alembic", "upgrade", "0008")
+        scratch(database_name, "alembic", "upgrade", "0009")
         scratch(database_name, "alembic", "upgrade", "head")
         scratch(database_name, "alembic", "current", "--check-heads")
         compose("restart", "postgres")
@@ -152,7 +153,7 @@ def main() -> None:
     finally:
         database(f"DROP DATABASE {database_name}")
     print(
-        "Identity smoke: fresh install, upgrades through 0009, runtime roles, TEN-01 and sessions passed."
+        "Identity smoke: fresh install, upgrades through 0010, runtime roles, TEN-01 and sessions passed."
     )
 
 

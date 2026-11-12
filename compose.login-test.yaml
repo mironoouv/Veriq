@@ -1,0 +1,30 @@
+# Local HTTPS only. Combine with compose.yaml.
+services:
+  migrate:
+    environment:
+      VERIQ_TEST_LOGIN_VERIFIER_PASSWORD: ${VERIQ_TEST_LOGIN_VERIFIER_PASSWORD:?Set a dedicated test verifier password}
+      VERIQ_TEST_LOGIN_ISSUER_PASSWORD: ${VERIQ_TEST_LOGIN_ISSUER_PASSWORD:?Set a dedicated test issuer password}
+  api:
+    environment:
+      VERIQ_ENV: test
+      VERIQ_ENABLE_TEST_LOGIN: "1"
+      VERIQ_TEST_LOGIN_HASH_CONCURRENCY: ${VERIQ_TEST_LOGIN_HASH_CONCURRENCY:-2}
+      VERIQ_TEST_LOGIN_ORIGIN: https://127.0.0.1:${VERIQ_TEST_LOGIN_PORT:-18443}
+      VERIQ_TEST_LOGIN_VERIFIER_PASSWORD: ${VERIQ_TEST_LOGIN_VERIFIER_PASSWORD:?Set a dedicated test verifier password}
+      VERIQ_TEST_LOGIN_ISSUER_PASSWORD: ${VERIQ_TEST_LOGIN_ISSUER_PASSWORD:?Set a dedicated test issuer password}
+      VERIQ_TEST_AUTH_HMAC_KEY: ${VERIQ_TEST_AUTH_HMAC_KEY:?Set a separate test HMAC key}
+      VERIQ_TEST_CSRF_KEY: ${VERIQ_TEST_CSRF_KEY:?Set a separate test CSRF key}
+    command: ["uvicorn", "veriq.main:create_app", "--factory", "--host", "0.0.0.0", "--no-proxy-headers", "--no-access-log", "--ssl-certfile", "/run/veriq/test-cert.pem", "--ssl-keyfile", "/run/veriq/test-key.pem"]
+    ports:
+      - "127.0.0.1:${VERIQ_TEST_LOGIN_PORT:-18443}:8000"
+    volumes:
+      - type: bind
+        source: ${VERIQ_TEST_TLS_CERT:?Set the path to the trusted loopback certificate}
+        target: /run/veriq/test-cert.pem
+        read_only: true
+      - type: bind
+        source: ${VERIQ_TEST_TLS_KEY:?Set the path to the loopback key}
+        target: /run/veriq/test-key.pem
+        read_only: true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import ssl; from urllib.request import urlopen; urlopen('https://127.0.0.1:8000/api/v1/health/ready', context=ssl.create_default_context(cafile='/run/veriq/test-cert.pem'), timeout=3).close()"]

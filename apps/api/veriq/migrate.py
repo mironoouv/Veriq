@@ -17,13 +17,18 @@ def main() -> None:
         "veriq_api": os.environ["VERIQ_API_DB_PASSWORD"],
         "veriq_worker": os.environ["VERIQ_WORKER_DB_PASSWORD"],
     }
+    verifier = os.environ.get("VERIQ_TEST_LOGIN_VERIFIER_PASSWORD", "")
+    issuer = os.environ.get("VERIQ_TEST_LOGIN_ISSUER_PASSWORD", "")
+    if verifier or issuer:
+        credentials.update(
+            veriq_password_verifier=verifier, veriq_browser_issuer=issuer
+        )
     if (
         "" in credentials.values()
-        or len({*credentials.values(), os.environ["VERIQ_DB_PASSWORD"]}) != 3
+        or len({*credentials.values(), os.environ["VERIQ_DB_PASSWORD"]})
+        != len(credentials) + 1
     ):
-        raise SystemExit(
-            "Migration, API and worker require distinct database credentials"
-        )
+        raise SystemExit("Database roles require distinct credentials")
     command.upgrade(Config("alembic.ini"), "head")
     engine = create_database_engine()
     try:
