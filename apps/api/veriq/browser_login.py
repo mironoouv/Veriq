@@ -19,7 +19,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.responses import HTMLResponse, JSONResponse, Response
 
 from veriq.auth_audit import AuthEvent, AuthResult, RequestContext, append_attempt
-from veriq.auth_credentials import CredentialVerifier
+from veriq.auth_credentials import CredentialProof, CredentialVerifier
 from veriq.auth_rate_limit import (
     AuthCategory,
     AuthLimitRejected,
@@ -28,6 +28,7 @@ from veriq.auth_rate_limit import (
     trusted_client_ip,
 )
 from veriq.mfa import Mfa, Purpose
+from veriq.mfa_recovery import MfaRecovery, RecoveryAction
 from veriq.password_recovery import PasswordRecovery
 from veriq.password_work import PasswordCapacityExceeded, PasswordWork
 from veriq.registration import Address, Signup, Verify, _body_schema, _error, _payload
@@ -54,6 +55,24 @@ class MfaCode(BaseModel):
 class StepUp(BaseModel):
     model_config = ConfigDict(extra="forbid")
     purpose: Purpose
+    resource_id: UUID | None = None
+
+
+class RecoveryCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: RecoveryAction
+    operation_id: UUID
+    source_id: UUID | None = None
+
+
+class RecoveryEnrollment(Signup):
+    capability: SecretStr
+
+
+class RecoveryComplete(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    capability: SecretStr
+    code: SecretStr
 
 
 class ChangePassword(BaseModel):
@@ -186,6 +205,7 @@ def browser_router(
     issuer: Engine,
     mfa: Mfa | None = None,
     recovery: PasswordRecovery | None = None,
+    mfa_recovery: MfaRecovery | None = None,
 ) -> APIRouter:
     origin = os.environ["VERIQ_TEST_LOGIN_ORIGIN"]
     parsed = urlsplit(origin)
@@ -208,6 +228,7 @@ def browser_router(
             if category
             in {
                 AuthCategory.MFA,
+                AuthCategory.MFA_RECOVERY,
                 AuthCategory.PASSWORD_RESET,
                 AuthCategory.PASSWORD_RESET_CONFIRM,
                 AuthCategory.PASSWORD_CHANGE,
@@ -442,7 +463,9 @@ def browser_router(
                 raise AccessDenied
             ip = trusted_client_ip(request.client.host, None, ())
             await limiter.check(
-                AuthCategory.MFA, ip, str(subject) if subject else f"invalid:{ip}"
+                AuthCategory.MFA,
+                ip,
+                str(subject) if subject else f"invalid:{ip}",
             )
 
         def rate_response(
@@ -510,7 +533,9 @@ def browser_router(
                 identity = await asyncio.to_thread(sessions.resolve, token)
                 await check_mfa_rate(request, identity.user_id)
                 return challenge_response(
-                    await asyncio.to_thread(service.begin_step_up, token, data.purpose)
+                    await asyncio.to_thread(
+                        service.begin_step_up, token, data.purpose, data.resource_id
+                    )
                 )
             except AuthLimitRejected as error:
                 return rate_response(error, context)
@@ -665,5 +690,180 @@ def browser_router(
 
     if recovery is not None:
         enable_recovery(recovery)
+
+    def enable_recovery_workflow(service: MfaRecovery) -> None:
+        async def guard(
+            request: Request, context: RequestContext, subject: str
+        ) -> Response | None:
+            if not csrf_valid(request):
+                return _error(context, "CSRF_DENIED", 403)
+            if request.client is None:
+                return _error(context, "INVALID_REQUEST", 400)
+            try:
+                await limiter.check(
+                    AuthCategory.MFA_RECOVERY,
+                    trusted_client_ip(request.client.host, None, ()),
+                    subject,
+                )
+            except AuthLimitRejected as error:
+                response = error.response(context)
+                response.headers.update(HEADERS)
+                return response
+            return None
+
+        async def primary(
+            email: str, raw: str, context: RequestContext
+        ) -> tuple[Candidate, CredentialProof]:
+            candidate = await work.run(lambda: passwords.check(email, raw))
+            if candidate is None:
+                raise AccessDenied
+            proof = await asyncio.to_thread(
+                passwords.verifier.confirm_password,
+                candidate.user_id,
+                candidate.version,
+                organization_id=None,
+                expected_hash=candidate.password_hash,
+                replacement=candidate.replacement,
+                context=context,
+            )
+            return candidate, proof
+
+        @router.post(
+            "/auth/mfa/recovery", status_code=202, openapi_extra=_body_schema(Signup)
+        )
+        async def start_recovery(request: Request) -> Response:
+            context = RequestContext.new()
+            if not csrf_valid(request):
+                return _error(context, "CSRF_DENIED", 403)
+            try:
+                data = Signup.model_validate(await _payload(request))
+                email = canonical_email(data.email)
+            except (ValueError, RecursionError):
+                return _error(context, "INVALID_REQUEST", 400)
+            rejection = await guard(request, context, "start:" + email)
+            if rejection is not None:
+                return rejection
+            try:
+                _, proof = await primary(
+                    email, data.password.get_secret_value(), context
+                )
+                await asyncio.to_thread(service.start, proof, context)
+            except AccessDenied:
+                pass
+            except (SQLAlchemyError, PasswordCapacityExceeded):
+                return _error(context, "SERVICE_UNAVAILABLE", 503)
+            return Response(status_code=202, headers=HEADERS)
+
+        @router.post(
+            "/auth/mfa/recovery/{case}/action",
+            openapi_extra=_body_schema(RecoveryCommand),
+        )
+        async def recovery_action(case: UUID, request: Request) -> Response:
+            context = RequestContext.new()
+            if not csrf_valid(request):
+                return _error(context, "CSRF_DENIED", 403)
+            try:
+                data = RecoveryCommand.model_validate(await _payload(request))
+                token = SessionToken(request.cookies.get(SESSION, ""))
+                identity = await asyncio.to_thread(sessions.resolve, token)
+                rejection = await guard(
+                    request, context, "staff:" + str(identity.user_id)
+                )
+                if rejection is not None:
+                    return rejection
+                capability = await asyncio.to_thread(
+                    service.transition,
+                    token,
+                    case,
+                    data.action,
+                    data.operation_id,
+                    context,
+                    data.source_id,
+                )
+            except (ValueError, RecursionError):
+                return _error(context, "INVALID_REQUEST", 400)
+            except AccessDenied:
+                return _error(context, "RECOVERY_DENIED", 404)
+            except SQLAlchemyError:
+                return _error(context, "SERVICE_UNAVAILABLE", 503)
+            if capability is not None:
+                return JSONResponse(
+                    {"enrollment_capability": capability}, headers=HEADERS
+                )
+            return Response(status_code=204, headers=HEADERS)
+
+        @router.post(
+            "/auth/mfa/recovery/{case}/enrollment",
+            openapi_extra=_body_schema(RecoveryEnrollment),
+        )
+        async def recovery_prepare(case: UUID, request: Request) -> Response:
+            context = RequestContext.new()
+            if not csrf_valid(request):
+                return _error(context, "CSRF_DENIED", 403)
+            try:
+                data = RecoveryEnrollment.model_validate(await _payload(request))
+                capability = data.capability.get_secret_value()
+                rejection = await guard(
+                    request, context, "prepare:" + str(case) + ":" + capability
+                )
+                if rejection is not None:
+                    return rejection
+                candidate, proof = await primary(
+                    canonical_email(data.email),
+                    data.password.get_secret_value(),
+                    context,
+                )
+                seed = await asyncio.to_thread(
+                    service.prepare,
+                    case,
+                    capability,
+                    request.cookies.get(CSRF, ""),
+                    candidate.user_id,
+                    proof,
+                )
+            except (ValueError, RecursionError):
+                return _error(context, "INVALID_REQUEST", 400)
+            except AccessDenied:
+                return _error(context, "RECOVERY_DENIED", 404)
+            except (SQLAlchemyError, InvalidTag, KeyError, PasswordCapacityExceeded):
+                return _error(context, "SERVICE_UNAVAILABLE", 503)
+            return JSONResponse({"totp_seed": seed}, headers=HEADERS)
+
+        @router.post(
+            "/auth/mfa/recovery/{case}/complete",
+            openapi_extra=_body_schema(RecoveryComplete),
+        )
+        async def recovery_finish(case: UUID, request: Request) -> Response:
+            context = RequestContext.new()
+            if not csrf_valid(request):
+                return _error(context, "CSRF_DENIED", 403)
+            try:
+                data = RecoveryComplete.model_validate(await _payload(request))
+                capability = data.capability.get_secret_value()
+                rejection = await guard(
+                    request, context, "complete:" + str(case) + ":" + capability
+                )
+                if rejection is not None:
+                    return rejection
+                codes = await asyncio.to_thread(
+                    service.complete,
+                    case,
+                    capability,
+                    request.cookies.get(CSRF, ""),
+                    data.code.get_secret_value(),
+                    context,
+                )
+            except (ValueError, RecursionError):
+                return _error(context, "INVALID_REQUEST", 400)
+            except AccessDenied:
+                return _error(context, "RECOVERY_DENIED", 404)
+            except (SQLAlchemyError, InvalidTag, KeyError):
+                return _error(context, "SERVICE_UNAVAILABLE", 503)
+            response = JSONResponse({"recovery_codes": codes}, headers=HEADERS)
+            _clear(response)
+            return response
+
+    if mfa_recovery is not None:
+        enable_recovery_workflow(mfa_recovery)
 
     return router

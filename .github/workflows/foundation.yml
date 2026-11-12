@@ -59,7 +59,7 @@ jobs:
           database -c 'DROP TABLE foundation_persistence_probe;'
           docker compose run --no-deps --rm -T migrate alembic current --check-heads
           python3 tests/smoke.py
-      - name: Verify identity migrations, TEN-01, sessions, MFA and password recovery
+      - name: Verify identity migrations, TEN-01, sessions, MFA and account recovery
         run: python3 tests/memberships_smoke.py
       - name: Verify background worker and Redis recovery
         run: python3 tests/worker_smoke.py

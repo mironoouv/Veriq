@@ -18,6 +18,8 @@ from veriq.browser_login import browser_router, login_enabled
 from veriq.database import create_database_engine, database_url
 from veriq.mfa import Mfa
 from veriq.mfa_crypto import FactorKeys
+from veriq.mfa_recovery import MfaRecovery
+from veriq.mfa_recovery import recovery_enabled as mfa_recovery_enabled
 from veriq.password_recovery import PasswordRecovery, recovery_enabled
 from veriq.redis_client import create_redis, ping_redis
 from veriq.registration import registration_enabled, registration_router
@@ -154,8 +156,20 @@ def create_app(
                 PasswordPolicy(Path(os.environ["VERIQ_TEST_PASSWORD_BLOCKLIST"])),
                 Fernet(os.environ["VERIQ_TEST_MAIL_KEY"].encode("ascii")),
             )
+        independent = None
+        if mfa is not None and mfa_engine is not None and mfa_recovery_enabled():
+            independent = MfaRecovery(
+                database, mfa_engine, Sessions(database).policy, mfa.keys
+            )
         app.include_router(
-            browser_router(database, cache, *login_engines, mfa=mfa, recovery=recovery)
+            browser_router(
+                database,
+                cache,
+                *login_engines,
+                mfa=mfa,
+                recovery=recovery,
+                mfa_recovery=independent,
+            )
         )
 
     return app

@@ -17,11 +17,13 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from veriq.database import create_database_engine
 from veriq.jobs import WAKE_QUEUE, enqueue_probe, process_next
+from veriq.mfa_recovery import recovery_enabled as mfa_recovery_enabled
 from veriq.password_recovery import recovery_enabled
 from veriq.redis_client import create_redis
 from veriq.registration import registration_enabled
 from veriq.verification_mail import (
     LocalMailbox,
+    deliver_password_notice,
     deliver_verification,
 )
 
@@ -53,6 +55,9 @@ async def main() -> int:
 
         cipher = mailbox = None
         password_mail = recovery_enabled()
+        security_mail = password_mail or mfa_recovery_enabled()
+        if security_mail:
+            mailbox = LocalMailbox(Path(os.environ["VERIQ_TEST_MAILBOX"]))
         if registration_enabled() or password_mail:
             cipher = Fernet(os.environ["VERIQ_TEST_MAIL_KEY"].encode("ascii"))
             mailbox = LocalMailbox(Path(os.environ["VERIQ_TEST_MAILBOX"]))
@@ -72,6 +77,8 @@ async def main() -> int:
                     processed = (
                         deliver_verification(engine, cipher, mailbox) or processed
                     )
+                if security_mail and mailbox is not None:
+                    processed = deliver_password_notice(engine, mailbox) or processed
                 HEARTBEAT.touch()
             except SQLAlchemyError:
                 LOG.warning("Background database operation unavailable")
