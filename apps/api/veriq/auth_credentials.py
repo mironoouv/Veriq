@@ -51,3 +51,25 @@ class CredentialVerifier:
             if not accepted:
                 raise AccessDenied
         return proof
+
+    def confirm_password(
+        self, user_id: UUID, credential_version: int, *, organization_id: UUID | None
+    ) -> CredentialProof:
+        """Record verified primary credentials through the password-only SQL role."""
+        proof = CredentialProof(uuid4(), secrets.token_bytes(32))
+        with self.engine.begin() as connection:
+            accepted = connection.execute(
+                text(
+                    "SELECT public.veriq_password_confirm(:id, :user, :version, :hash, :org)"
+                ),
+                {
+                    "id": proof.id,
+                    "user": user_id,
+                    "version": credential_version,
+                    "hash": proof.digest,
+                    "org": organization_id,
+                },
+            ).scalar_one()
+            if not accepted:
+                raise AccessDenied
+        return proof

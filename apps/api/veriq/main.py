@@ -12,7 +12,8 @@ from redis.exceptions import RedisError
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
-from veriq.database import create_database_engine
+from veriq.browser_login import browser_router, login_enabled
+from veriq.database import create_database_engine, database_url
 from veriq.redis_client import create_redis, ping_redis
 from veriq.registration import registration_enabled, registration_router
 
@@ -43,12 +44,33 @@ def create_app(
     if enable_docs is None:
         enable_docs = os.environ.get("VERIQ_ENV") == "development"
 
+    login_engines: tuple[Engine, Engine] | None = None
+    if cache is not None and login_enabled():
+        url = database_url()
+        login_engines = (
+            create_database_engine(
+                url.set(
+                    username="veriq_password_verifier",
+                    password=os.environ["VERIQ_TEST_LOGIN_VERIFIER_PASSWORD"],
+                )
+            ),
+            create_database_engine(
+                url.set(
+                    username="veriq_browser_issuer",
+                    password=os.environ["VERIQ_TEST_LOGIN_ISSUER_PASSWORD"],
+                )
+            ),
+        )
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         try:
             yield
         finally:
             database.dispose()
+            if login_engines is not None:
+                for login_engine in login_engines:
+                    login_engine.dispose()
             if cache is not None:
                 await cache.aclose()
 
@@ -97,5 +119,8 @@ def create_app(
 
     if cache is not None and registration_enabled():
         app.include_router(registration_router(database, cache))
+
+    if cache is not None and login_engines is not None:
+        app.include_router(browser_router(database, cache, *login_engines))
 
     return app
