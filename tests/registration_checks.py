@@ -703,6 +703,7 @@ def mfa_http(
     assert status == 200
     csrf = json.loads(body)["csrf_token"]
     if seed is None:
+        assert call("/auth/mfa/recovery", {"email": email, "password": FINAL})[0] == 503
         assert call("/auth/password-reset/request", {"email": email})[0] == 503
         assert call("/auth/mfa/challenge", {"code": "invalid"})[0] == 503
         print("MFA HTTP fails closed during Redis outage.")
@@ -784,6 +785,7 @@ def configure_mfa(root: Path) -> FactorKeys:
         json.dumps({"active": "test", "keys": {"test": key.hex()}}), encoding="ascii"
     )
     os.environ["VERIQ_ENABLE_TEST_MFA"] = "1"
+    os.environ["VERIQ_ENABLE_TEST_MFA_RECOVERY"] = "1"
     os.environ["VERIQ_ENABLE_TEST_PASSWORD_RECOVERY"] = "1"
     os.environ["VERIQ_TEST_MFA_KEYRING"] = str(ring)
     return FactorKeys("test", {"test": key})

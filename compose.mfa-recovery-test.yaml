@@ -1,0 +1,12 @@
+# Use only with the explicitly local HTTPS login and MFA overlays.
+services:
+  api:
+    environment:
+      VERIQ_ENABLE_TEST_MFA_RECOVERY: "1"
+  worker:
+    environment:
+      VERIQ_ENV: test
+      VERIQ_ENABLE_TEST_MFA_RECOVERY: "1"
+      VERIQ_TEST_MAILBOX: /run/veriq/mailbox
+    tmpfs:
+      - /run/veriq/mailbox:uid=10001,gid=10001,mode=0700

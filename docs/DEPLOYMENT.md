@@ -135,3 +135,6 @@ docker compose -p veriq-login-test -f compose.yaml -f compose.login-test.yaml up
 ## Тестовый стенд смены и восстановления пароля
 
 Добавьте `compose.password-recovery-test.yaml` после `compose.login-test.yaml` и при проверке MFA после `compose.mfa-test.yaml`. Используйте выделенные тестовые `VERIQ_TEST_MAIL_KEY` и файл `VERIQ_TEST_PASSWORD_BLOCKLIST`. Worker пишет письмо со ссылкой и уведомление об изменении credentials в закрытый локальный mailbox. Уведомление содержит адрес получателя и тип события. Внешний SMTP, production-политика блоклиста, управление ключами и публичная активация требуют отдельного согласования.
+
+
+Для тестового независимого восстановления добавьте `compose.mfa-recovery-test.yaml` после HTTPS login и MFA overlays. Назначения платформенных ролей, организационные grants и доверенные источники задаёт оператор тестовой БД. Worker использует закрытый локальный mailbox. Секрет enrollment передаётся отдельно через проверенный канал. Публичный запуск, внешний SMTP и офлайн-восстановление Superadmin остаются закрыты.

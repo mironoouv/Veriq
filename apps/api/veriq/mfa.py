@@ -21,6 +21,8 @@ class Purpose(StrEnum):
     SENSITIVE = "sensitive"
     FACTOR_DISABLE = "factor_disable"
     PASSWORD_CHANGE = "password_change"
+    RECOVERY_REVIEW = "mfa_recovery_review"
+    RECOVERY_RELEASE = "mfa_recovery_release"
 
 
 @dataclass(frozen=True)
@@ -105,13 +107,14 @@ class Mfa:
         version: int,
         purpose: str,
         session_id: UUID | None = None,
+        resource_id: UUID | None = None,
     ) -> SessionToken:
         token = SessionToken.generate()
         gate = token._gate(self.sessions.policy)
         connection.execute(
             text("""INSERT INTO mfa_challenges (
-                id, digest, user_id, factor_id, organization_id, credential_version, purpose, session_id, expires_at
-            ) VALUES (:id, :digest, :user, :factor, :org, :version, :purpose, :session,
+                id, digest, user_id, factor_id, organization_id, credential_version, purpose, session_id, resource_id, expires_at
+            ) VALUES (:id, :digest, :user, :factor, :org, :version, :purpose, :session, :resource,
                       clock_timestamp() + interval '3 minutes')"""),
             {
                 "id": gate.session_id,
@@ -122,6 +125,7 @@ class Mfa:
                 "version": version,
                 "purpose": purpose,
                 "session": session_id,
+                "resource": resource_id,
             },
         )
         return token
@@ -154,7 +158,13 @@ class Mfa:
                 purpose,
             )
 
-    def begin_step_up(self, token: SessionToken, purpose: Purpose) -> SessionToken:
+    def begin_step_up(
+        self, token: SessionToken, purpose: Purpose, resource_id: UUID | None = None
+    ) -> SessionToken:
+        if (purpose in {Purpose.RECOVERY_REVIEW, Purpose.RECOVERY_RELEASE}) != (
+            resource_id is not None
+        ):
+            raise AccessDenied
         gate = token._gate(self.sessions.policy)
         # Resolve in its own transaction so the MFA transaction can acquire account lock first.
         identity = self.sessions.resolve(token)
@@ -183,6 +193,7 @@ class Mfa:
                 version,
                 purpose,
                 gate.session_id,
+                resource_id,
             )
 
     def challenge_subject(self, token: SessionToken) -> UUID:
@@ -353,9 +364,13 @@ class Mfa:
                     ):
                         raise AccessDenied
                     connection.execute(
-                        text("""INSERT INTO mfa_session_assurance (session_id, purpose, verified_at)
-                            VALUES (:id, :purpose, clock_timestamp())"""),
-                        {"id": next_gate.session_id, "purpose": row.purpose},
+                        text("""INSERT INTO mfa_session_assurance (session_id, purpose, verified_at, resource_id)
+                            VALUES (:id, :purpose, clock_timestamp(), :resource)"""),
+                        {
+                            "id": next_gate.session_id,
+                            "purpose": row.purpose,
+                            "resource": row.resource_id,
+                        },
                     )
                     connection.execute(
                         text("""SELECT public.veriq_auth_append_event(
