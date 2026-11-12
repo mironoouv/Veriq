@@ -1,5 +1,6 @@
 """Registration HTTP, PostgreSQL, Redis, and local mail integration."""
 
+import base64
 import json
 import os
 import secrets
@@ -39,7 +40,10 @@ from veriq.auth_credentials import CredentialVerifier
 from veriq.browser_login import PasswordLogin
 from veriq.database import database_url
 from veriq.main import create_app
+from veriq.mfa import Mfa
+from veriq.mfa_crypto import FactorKeys, totp
 from veriq.registration_policy import HASHER
+from veriq.sessions import Sessions
 from veriq.tenant_access import AccessDenied
 from veriq.verification_mail import LocalMailbox, deliver_verification
 
@@ -642,6 +646,7 @@ def provision_browser_roles(owner: Engine) -> None:
         for role, variable in (
             ("veriq_password_verifier", "VERIQ_TEST_LOGIN_VERIFIER_PASSWORD"),
             ("veriq_browser_issuer", "VERIQ_TEST_LOGIN_ISSUER_PASSWORD"),
+            ("veriq_mfa_verifier", "VERIQ_TEST_MFA_DB_PASSWORD"),
         ):
             password = secrets.token_hex(32)
             verifier = driver.pgconn.encrypt_password(
@@ -653,6 +658,106 @@ def provision_browser_roles(owner: Engine) -> None:
                 )
             )
             os.environ[variable] = password
+
+
+def mfa_http(
+    address: str, tls: ssl.SSLContext, email: str, seed: bytes | None, owner: Engine
+) -> None:
+    origin = address.removesuffix(PREFIX)
+    cookies: dict[str, str] = {}
+    csrf = ""
+
+    def call(
+        path: str, data: dict[str, str] | None = None, *, site: str = origin
+    ) -> tuple[int, bytes]:
+        request = Request(
+            origin + "/api/v1" + path,
+            json.dumps(data).encode() if data is not None else None,
+            {
+                "Origin": site,
+                "Cookie": "; ".join(f"{k}={v}" for k, v in cookies.items()),
+                "Content-Type": "application/json",
+                "X-Veriq-CSRF-Bootstrap": "1",
+                "X-CSRF-Token": csrf,
+            },
+        )
+        try:
+            with urlopen(request, context=tls, timeout=10) as response:
+                for cookie in response.headers.get_all("Set-Cookie", []):
+                    name, value = cookie.split(";", 1)[0].split("=", 1)
+                    assert (
+                        "HttpOnly" in cookie
+                        and "Secure" in cookie
+                        and "SameSite=lax" in cookie
+                    )
+                    if value and value != '""':
+                        cookies[name] = value
+                    else:
+                        cookies.pop(name, None)
+                return response.status, response.read()
+        except HTTPError as error:
+            with error:
+                return error.code, error.read()
+
+    status, body = call("/auth/csrf")
+    assert status == 200
+    csrf = json.loads(body)["csrf_token"]
+    if seed is None:
+        assert call("/auth/mfa/challenge", {"code": "invalid"})[0] == 503
+        print("MFA HTTP fails closed during Redis outage.")
+        return
+
+    assert call("/auth/login", {"email": email, "password": FINAL})[0] == 202
+    assert "__Host-veriq-session" not in cookies
+    assert "__Host-veriq-mfa-challenge" in cookies
+    assert call("/me")[0] == 401
+    assert call("/auth/mfa/challenge", {"code": "invalid"})[0] == 403
+    status, body = call("/auth/csrf")
+    assert status == 200
+    csrf = json.loads(body)["csrf_token"]
+    assert (
+        call(
+            "/auth/mfa/challenge",
+            {"code": "invalid"},
+            site="https://other.example.invalid",
+        )[0]
+        == 403
+    )
+    counter = query(
+        owner, "SELECT floor(extract(epoch FROM clock_timestamp())/30)::bigint"
+    )
+    status, body = call("/auth/mfa/challenge", {"code": totp(seed, counter)})
+    assert status == 200 and len(json.loads(body)["recovery_codes"]) == 10
+    assert (
+        "__Host-veriq-session" in cookies
+        and "__Host-veriq-mfa-challenge" not in cookies
+    )
+    assert call("/me")[0] == 200
+    status, body = call("/auth/csrf")
+    assert status == 200
+    csrf = json.loads(body)["csrf_token"]
+    assert call("/auth/mfa/step-up", {"purpose": "sensitive"})[0] == 202
+    status, body = call("/auth/csrf")
+    assert status == 200
+    csrf = json.loads(body)["csrf_token"]
+    for _ in range(3):
+        assert call("/auth/mfa/challenge", {"code": "invalid"})[0] == 401
+    assert call("/auth/mfa/challenge", {"code": "invalid"})[0] == 429
+    assert call("/me")[0] == 200
+    print(
+        "MFA HTTPS: password challenge, cookie isolation, CSRF, TOTP and session issuance passed."
+    )
+
+
+def configure_mfa(root: Path) -> FactorKeys:
+    key = secrets.token_bytes(32)
+    ring = root / "mfa.json"
+    ring.write_text(
+        json.dumps({"active": "test", "keys": {"test": key.hex()}}), encoding="ascii"
+    )
+    os.environ["VERIQ_ENABLE_TEST_MFA"] = "1"
+    os.environ["VERIQ_TEST_MFA_KEYRING"] = str(ring)
+    return FactorKeys("test", {"test": key})
 
 
 def main() -> None:
@@ -700,6 +805,18 @@ def main() -> None:
                         == 503
                     )
                 print("Registration Redis outage fails closed.")
+                for name in (
+                    "VERIQ_TEST_LOGIN_VERIFIER_PASSWORD",
+                    "VERIQ_TEST_LOGIN_ISSUER_PASSWORD",
+                    "VERIQ_TEST_MFA_DB_PASSWORD",
+                    "VERIQ_TEST_CSRF_KEY",
+                ):
+                    os.environ[name] = secrets.token_hex(32)
+                os.environ["VERIQ_ENABLE_TEST_LOGIN"] = "1"
+                configure_mfa(root)
+                certfile, keyfile, tls = tls_fixture(root)
+                with server(certfile, keyfile) as address:
+                    mfa_http(address, tls, "outage@example.invalid", None, owner)
                 return
             assert_denial(api, "SELECT digest FROM email_verification_proofs")
             assert_denial(api, "SELECT envelope FROM email_verification_outbox")
@@ -768,7 +885,40 @@ def main() -> None:
                     send(address, "/login", email=verified_email, password=FINAL)[0]
                     == 403
                 )
+            keys = configure_mfa(root)
+            mfa_engine = create_engine(
+                url.set(
+                    username="veriq_mfa_verifier",
+                    password=os.environ["VERIQ_TEST_MFA_DB_PASSWORD"],
+                ),
+                hide_parameters=True,
+            )
+            try:
+                service = Mfa(mfa_engine, Sessions(api), keys)
+                user = query(
+                    owner,
+                    "SELECT id FROM users WHERE email_normalized=:email",
+                    email=verified_email,
+                )
+                seed = base64.b32decode(
+                    service.prepare_enrollment(user, RequestContext.new())
+                )
+                captured_mfa = StringIO()
+                with (
+                    redirect_stderr(captured_mfa),
+                    server(certfile, keyfile) as address,
+                ):
+                    mfa_http(address, tls, verified_email, seed, owner)
+                assert (
+                    base64.b32encode(seed).decode("ascii")
+                    not in captured_mfa.getvalue()
+                )
+            finally:
+                mfa_engine.dispose()
             with owner.begin() as connection:
+                connection.exec_driver_sql(
+                    "ALTER ROLE veriq_mfa_verifier NOLOGIN PASSWORD NULL"
+                )
                 connection.exec_driver_sql(
                     "ALTER ROLE veriq_password_verifier NOLOGIN PASSWORD NULL"
                 )

@@ -12,8 +12,9 @@ from uuid import UUID, uuid4
 
 from argon2 import Type, extract_parameters
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
+from cryptography.exceptions import InvalidTag
 from fastapi import APIRouter, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from redis.asyncio import Redis
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -28,6 +29,7 @@ from veriq.auth_rate_limit import (
     LimitBudget,
     trusted_client_ip,
 )
+from veriq.mfa import Mfa, Purpose
 from veriq.password_work import PasswordCapacityExceeded, PasswordWork
 from veriq.registration import Signup, _body_schema, _error, _payload
 from veriq.registration_policy import HASHER, canonical_email
@@ -36,11 +38,23 @@ from veriq.tenant_access import AccessDenied
 
 SESSION = "__Host-veriq-session"
 CSRF = "__Host-veriq-csrf"
+CHALLENGE = "__Host-veriq-mfa-challenge"
 HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
 
 
 class Login(Signup):
     organization_id: UUID | None = Field(default=None, strict=False)
+
+
+class MfaCode(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    code: SecretStr
+    recovery: bool = False
+
+
+class StepUp(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    purpose: Purpose
 
 
 class Rotation(BaseModel):
@@ -129,7 +143,7 @@ def _set_cookie(response: Response, name: str, value: str) -> None:
 
 
 def _clear(response: Response) -> None:
-    for name in (SESSION, CSRF):
+    for name in (SESSION, CSRF, CHALLENGE):
         response.delete_cookie(
             name, secure=True, httponly=True, samesite="lax", path="/"
         )
@@ -141,7 +155,11 @@ def _audit(engine: Engine, context: RequestContext, result: AuthResult) -> None:
 
 
 def browser_router(
-    engine: Engine, redis: Redis, verifier: Engine, issuer: Engine
+    engine: Engine,
+    redis: Redis,
+    verifier: Engine,
+    issuer: Engine,
+    mfa: Mfa | None = None,
 ) -> APIRouter:
     origin = os.environ["VERIQ_TEST_LOGIN_ORIGIN"]
     parsed = urlsplit(origin)
@@ -157,7 +175,14 @@ def browser_router(
     if len(csrf_key) < 32 or csrf_key == limit_key:
         raise ValueError("Browser login requires a separate CSRF key")
     limiter = AuthRateLimiter(
-        redis, limit_key, dict.fromkeys(AuthCategory, LimitBudget(40, 10, 300))
+        redis,
+        limit_key,
+        {
+            category: LimitBudget(30, 5, 180)
+            if category is AuthCategory.MFA
+            else LimitBudget(40, 10, 300)
+            for category in AuthCategory
+        },
     )
     passwords = PasswordLogin(CredentialVerifier(verifier))
     sessions = Sessions(engine, issuer=issuer)
@@ -171,7 +196,10 @@ def browser_router(
 
     def csrf_value(request: Request, nonce: str) -> str:
         binding = request.cookies.get(SESSION, "")
-        return hmac.digest(csrf_key, f"{nonce}:{binding}".encode(), "sha256").hex()
+        challenge = request.cookies.get(CHALLENGE, "")
+        return hmac.digest(
+            csrf_key, f"{nonce}:{binding}:{challenge}".encode(), "sha256"
+        ).hex()
 
     def csrf_valid(request: Request) -> bool:
         nonce = request.cookies.get(CSRF, "")
@@ -227,7 +255,7 @@ def browser_router(
             rejected.headers.update(HEADERS)
             return rejected
 
-        def issue(candidate: Candidate) -> SessionToken:
+        def issue(candidate: Candidate) -> tuple[SessionToken, bool]:
             proof = passwords.verifier.confirm_password(
                 candidate.user_id,
                 candidate.version,
@@ -236,7 +264,11 @@ def browser_router(
                 replacement=candidate.replacement,
                 context=context,
             )
-            return sessions.issue(proof, context=context, browser=True)
+            if mfa is not None:
+                challenge = mfa.begin_login(proof)
+                if challenge is not None:
+                    return challenge, True
+            return sessions.issue(proof, context=context, browser=True), False
 
         try:
             candidate = await work.run(
@@ -244,7 +276,7 @@ def browser_router(
             )
             if candidate is None:
                 raise AccessDenied
-            token = await asyncio.to_thread(issue, candidate)
+            token, requires_mfa = await asyncio.to_thread(issue, candidate)
         except PasswordCapacityExceeded:
             return _error(context, "SERVICE_UNAVAILABLE", 503)
         except MfaRequired:
@@ -258,6 +290,8 @@ def browser_router(
         except SQLAlchemyError:
             return _error(context, "SERVICE_UNAVAILABLE", 503)
 
+        if requires_mfa:
+            return challenge_response(token)
         response = Response(
             status_code=204,
             headers={**HEADERS, "X-Request-ID": str(context.request_id)},
@@ -352,4 +386,127 @@ def browser_router(
         )
         return response
 
+    def challenge_response(token: SessionToken) -> Response:
+        response = JSONResponse(
+            {"status": "mfa_required"}, status_code=202, headers=HEADERS
+        )
+        response.set_cookie(
+            CHALLENGE,
+            token.value,
+            max_age=180,
+            secure=True,
+            httponly=True,
+            samesite="lax",
+            path="/",
+        )
+        response.delete_cookie(
+            CSRF, secure=True, httponly=True, samesite="lax", path="/"
+        )
+        return response
+
+    def enable_mfa(service: Mfa) -> None:
+        async def check_mfa_rate(request: Request, subject: UUID | None) -> None:
+            if request.client is None:
+                raise AccessDenied
+            ip = trusted_client_ip(request.client.host, None, ())
+            await limiter.check(
+                AuthCategory.MFA, ip, str(subject) if subject else f"invalid:{ip}"
+            )
+
+        def rate_response(
+            error: AuthLimitRejected, context: RequestContext
+        ) -> Response:
+            response = error.response(context)
+            response.headers.update(HEADERS)
+            return response
+
+        @router.post("/auth/mfa/challenge", openapi_extra=_body_schema(MfaCode))
+        async def complete_mfa(request: Request) -> Response:
+            context = RequestContext.new()
+            if not csrf_valid(request):
+                return _error(context, "CSRF_DENIED", 403)
+            try:
+                data = MfaCode.model_validate(await _payload(request))
+            except (ValueError, RecursionError):
+                return _error(context, "INVALID_REQUEST", 400)
+            challenge = SessionToken(request.cookies.get(CHALLENGE, ""))
+            current = request.cookies.get(SESSION)
+            try:
+                try:
+                    subject = await asyncio.to_thread(
+                        service.challenge_subject, challenge
+                    )
+                except AccessDenied:
+                    subject = None
+                await check_mfa_rate(request, subject)
+                completion = await asyncio.to_thread(
+                    service.finish,
+                    challenge,
+                    data.code.get_secret_value(),
+                    recovery=data.recovery,
+                    current=SessionToken(current) if current is not None else None,
+                    context=context,
+                )
+            except AuthLimitRejected as error:
+                return rate_response(error, context)
+            except AccessDenied:
+                return _error(context, "MFA_DENIED", 401)
+            except (SQLAlchemyError, InvalidTag, KeyError):
+                return _error(context, "SERVICE_UNAVAILABLE", 503)
+            response = (
+                JSONResponse(
+                    {"recovery_codes": completion.recovery_codes}, headers=HEADERS
+                )
+                if completion.recovery_codes
+                else Response(status_code=204, headers=HEADERS)
+            )
+            _clear(response)
+            _set_cookie(response, SESSION, completion.token.value)
+            return response
+
+        @router.post("/auth/mfa/step-up", openapi_extra=_body_schema(StepUp))
+        async def step_up(request: Request) -> Response:
+            context = RequestContext.new()
+            if not csrf_valid(request):
+                return _error(context, "CSRF_DENIED", 403)
+            try:
+                data = StepUp.model_validate(await _payload(request))
+            except (ValueError, RecursionError):
+                return _error(context, "INVALID_REQUEST", 400)
+            token = SessionToken(request.cookies.get(SESSION, ""))
+            try:
+                identity = await asyncio.to_thread(sessions.resolve, token)
+                await check_mfa_rate(request, identity.user_id)
+                return challenge_response(
+                    await asyncio.to_thread(service.begin_step_up, token, data.purpose)
+                )
+            except AuthLimitRejected as error:
+                return rate_response(error, context)
+            except AccessDenied:
+                return _error(context, "MFA_DENIED", 401)
+            except SQLAlchemyError:
+                return _error(context, "SERVICE_UNAVAILABLE", 503)
+
+        @router.post("/auth/mfa/disable", status_code=204)
+        async def disable(request: Request) -> Response:
+            context = RequestContext.new()
+            if not csrf_valid(request):
+                return _error(context, "CSRF_DENIED", 403)
+            token = SessionToken(request.cookies.get(SESSION, ""))
+            try:
+                identity = await asyncio.to_thread(sessions.resolve, token)
+                await check_mfa_rate(request, identity.user_id)
+                await asyncio.to_thread(service.disable, token, context)
+            except AuthLimitRejected as error:
+                return rate_response(error, context)
+            except AccessDenied:
+                return _error(context, "MFA_DENIED", 401)
+            except SQLAlchemyError:
+                return _error(context, "SERVICE_UNAVAILABLE", 503)
+            response = Response(status_code=204, headers=HEADERS)
+            _clear(response)
+            return response
+
+    if mfa is not None:
+        enable_mfa(mfa)
     return router

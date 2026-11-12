@@ -2,6 +2,7 @@ import asyncio
 import os
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
@@ -14,8 +15,11 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from veriq.browser_login import browser_router, login_enabled
 from veriq.database import create_database_engine, database_url
+from veriq.mfa import Mfa
+from veriq.mfa_crypto import FactorKeys
 from veriq.redis_client import create_redis, ping_redis
 from veriq.registration import registration_enabled, registration_router
+from veriq.sessions import Sessions
 
 
 class Health(BaseModel):
@@ -62,6 +66,21 @@ def create_app(
             ),
         )
 
+    mfa_engine: Engine | None = None
+    mfa: Mfa | None = None
+    if login_engines is not None and os.environ.get("VERIQ_ENABLE_TEST_MFA") == "1":
+        mfa_engine = create_database_engine(
+            database_url().set(
+                username="veriq_mfa_verifier",
+                password=os.environ["VERIQ_TEST_MFA_DB_PASSWORD"],
+            )
+        )
+        mfa = Mfa(
+            mfa_engine,
+            Sessions(database),
+            FactorKeys.load(Path(os.environ["VERIQ_TEST_MFA_KEYRING"])),
+        )
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         try:
@@ -71,6 +90,8 @@ def create_app(
             if login_engines is not None:
                 for login_engine in login_engines:
                     login_engine.dispose()
+            if mfa_engine is not None:
+                mfa_engine.dispose()
             if cache is not None:
                 await cache.aclose()
 
@@ -121,6 +142,6 @@ def create_app(
         app.include_router(registration_router(database, cache))
 
     if cache is not None and login_engines is not None:
-        app.include_router(browser_router(database, cache, *login_engines))
+        app.include_router(browser_router(database, cache, *login_engines, mfa=mfa))
 
     return app

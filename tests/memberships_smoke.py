@@ -10,6 +10,7 @@ CHECKS = Path(__file__).with_name("membership_checks.py")
 TENANT_CHECKS = Path(__file__).with_name("tenant_checks.py")
 REGISTRATION_CHECKS = Path(__file__).with_name("registration_checks.py")
 AUTH_RATE_CHECKS = Path(__file__).with_name("auth_rate_checks.py")
+MFA_CHECKS = Path(__file__).with_name("mfa_checks.py")
 SESSION_CHECKS = Path(__file__).with_name("session_checks.py")
 CHECK_SERVICE_ROLE = """
 import sys
@@ -123,6 +124,7 @@ def main() -> None:
         scratch(database_name, "alembic", "upgrade", "0007")
         scratch(database_name, "alembic", "upgrade", "0008")
         scratch(database_name, "alembic", "upgrade", "0009")
+        scratch(database_name, "alembic", "upgrade", "0010")
         scratch(database_name, "alembic", "upgrade", "head")
         scratch(database_name, "alembic", "current", "--check-heads")
         compose("restart", "postgres")
@@ -135,6 +137,9 @@ def main() -> None:
             stdin=TENANT_CHECKS.read_text(encoding="utf-8"),
         )
         registration(database_name)
+        scratch(
+            database_name, "python", "-", stdin=MFA_CHECKS.read_text(encoding="utf-8")
+        )
         rate_checks = AUTH_RATE_CHECKS.read_text(encoding="utf-8")
         compose("exec", "-T", "api", "python", "-", stdin=rate_checks)
         compose("stop", "redis")
@@ -153,7 +158,7 @@ def main() -> None:
     finally:
         database(f"DROP DATABASE {database_name}")
     print(
-        "Identity smoke: fresh install, upgrades through 0010, runtime roles, TEN-01 and sessions passed."
+        "Identity smoke: fresh install, upgrades through 0011, runtime roles, TEN-01 and sessions passed."
     )
 
 
