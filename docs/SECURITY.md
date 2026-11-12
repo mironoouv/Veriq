@@ -36,6 +36,42 @@ boolean and set its own PostgreSQL settings. This boundary assumes trusted API
 SQL and server-verified subjects. It cannot defend against arbitrary SQL
 execution with that credential. Public session resolution is deferred.
 
+Use short transactions at READ COMMITTED for request authorization. RLS uses the
+statement's PostgreSQL snapshot. It cannot retract rows already returned or see
+a revocation committed after that snapshot. REPEATABLE READ and SERIALIZABLE can
+retain older visibility across statements. Never carry a connection, tenant
+scope, or authorization decision across requests. `VerifiedSubject` is only a
+server-side contract. Its constructor does not authenticate anyone, and request
+payloads must never be deserialized into it.
+
+### Session foundation (Slice D)
+
+The internal issuer accepts identity and assurance from trusted authentication.
+The login used by API cannot issue sessions. No HTTP auth routes, cookie adapter
+or MFA challenge handler exist in this slice. Future browser integration must
+use Secure, HttpOnly and appropriate SameSite cookies, CSRF protection on
+state-changing requests, and origin checks. Step-up must establish a new trusted
+assurance before issuing a replacement session. The client cannot set MFA level
+or pass its own subject.
+
+A token consists of a UUID and a 256-bit random secret. Only its SHA-256 digest
+and metadata are stored. Never put the bearer in a URL, logs or trace attributes.
+Resolve under READ COMMITTED and use the same short transaction for tenant
+access. Authorization checks session eligibility and effective grants in a
+single statement. The stored tenant and grant epoch bind the token to its
+selection. Revoking membership invalidates that selection even after reactivation.
+Disabled accounts and inactive memberships are refused on current reads.
+Account-disable workflows in Auth must also revoke sessions before re-enabling
+an account if old global sessions should stay invalid.
+
+The selected organization determines whether Org Admin or Technician requires
+MFA and shorter lifetimes. Platform Superadmin requires MFA independently of
+tenant selection and gets no implicit tenant grants. The row lock serializes
+touch, single revoke and rotation. An account-level transaction advisory lock
+orders issue, rotation and revoke-all. An already running request can finish
+before a competing revocation obtains its lock. Recheck at each request and
+do not keep transactions open for streams or interactive exam work.
+
 ## Agent security
 - Agent service has device identity; initial deployment token limited to org, TTL and quota, admin approval. Key generated per device; protect at rest (Windows machine key store/DPAPI) and pin server trust with ordinary certificate validation, no bypass TLS.
 - C# desktop in user session, service in Session 0, restricted named pipe ACL. Stop capture on logout/end. No keylogging, covert capture, arbitrary remote code execution, personal file scraping.

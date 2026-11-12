@@ -9,7 +9,7 @@
 
 ## Identity / Academic
 `users(id,email_normalized unique,email_verified_at,password_hash,disabled_at,...)`
-`auth_sessions(id,user_id,token_hash,device_hint,created_at,last_seen_at,expires_at,revoked_at,mfa_level)`
+`auth_sessions(id,user_id,token_hash,organization_id,grant_epoch,mfa_level,authenticated_at,created_at,last_seen_at,idle_expires_at,absolute_expires_at,revoked_at,revoke_reason)`
 `mfa_factors(id,user_id,kind,encrypted_secret,created_at,last_used_at)`; `recovery_codes(id,user_id,code_hash,used_at)`
 `organizations(id,slug unique,display_name,timezone,retention_policy_id,status)`
 `organization_memberships(id,organization_id,user_id,status,joined_at,unique(org,user))`
@@ -150,7 +150,39 @@ grant_epoch, role_id)` исключает дубликаты в текущей �
 БД кластера и не удаляются. Параметры логина выдаёт процесс `migrate` после
 успешного Alembic upgrade, с отдельными паролями для API и worker.
 
+### Slice D — ревизия `0007`
+
+Таблица `auth_sessions` хранит UUID и уникальный 32-байтный SHA-256 хеш
+токена. Составной FK `(organization_id, user_id)` допускает выбор только
+собственного членства. При отсутствии выбора оба поля контекста
+`organization_id` и `grant_epoch` равны NULL. При проверке сессии актуальный
+статус и эпоха членства сверяются с сохранёнными.
+
+Сроки по умолчанию: привилегированные 30 минут / 8 часов, обычные 2 часа /
+12 часов (idle / absolute). Настройка процесса — целое число секунд в
+`VERIQ_SESSION_PRIVILEGED_IDLE_SECONDS`, `VERIQ_SESSION_PRIVILEGED_ABSOLUTE_SECONDS`,
+`VERIQ_SESSION_ORDINARY_IDLE_SECONDS`, `VERIQ_SESSION_ORDINARY_ABSOLUTE_SECONDS`
+или объект `SessionPolicy`. Idle обновляется только у действительной сессии.
+Ротация атомарно отзывает старую строку и создаёт новую, сохраняя первоначальное
+`authenticated_at` и не продлевая абсолютный предел. Смена организации
+использует ротацию. Сессии не управляют временем или состоянием попытки экзамена.
+
+`veriq_session_store` — роль NOLOGIN и владелец фиксированных функций
+сессий, с точечным чтением identity-колонок и записью в `auth_sessions`.
+У неё нет владения таблицами, BYPASSRLS или DELETE. Функции задают
+`search_path = pg_catalog, pg_temp`, используют квалифицированные имена
+и закрыты для PUBLIC. `veriq_api` может проверять, ротировать и отзывать
+сессию по UUID и хешу, но не читает таблицу напрямую. Выпуск доступен
+отдельной роли NOLOGIN `veriq_session_issuer`. Тесты принимают её в
+одноразовой БД, production-подключение доверенного Auth будет спроектировано
+отдельно. Worker не вызывает функции сессий.
+
+Миграция не меняет существующие записи. Downgrade блокируется, если таблица
+сессий непуста. Срок хранения и удаление истории сессий требуют отдельной
+политики. Публичный вход, MFA и CSRF не добавлены.
+
 ## Migration sequence
+
 1. identity, membership, organization RBAC; 2. academic; 3. banks/questions; 4. publications/assignments; 5. attempts/answers/grading; 6. agent/proctoring; 7. judge; 8. audit and backup catalogs; 9. indexes, RLS hardening. All migrations tested fresh DB and upgrade from previous revision.
 
 Foundation 1a включает ревизию Alembic `0001` с базовыми таблицами

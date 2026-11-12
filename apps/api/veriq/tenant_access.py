@@ -7,7 +7,7 @@ from uuid import UUID
 
 from sqlalchemy import Connection, Engine, text
 
-from veriq.permissions import organization_permission_codes
+from veriq.permissions import SessionGate, organization_permission_codes
 
 
 class AccessDenied(PermissionError):
@@ -40,6 +40,7 @@ class TenantAccess:
     connection: Connection
     subject: VerifiedSubject
     organization_id: UUID
+    session_gate: SessionGate | None = None
 
     def require(self, policy: ResourcePolicy, resource: TenantResource | None) -> None:
         if resource is None or resource.organization_id != self.organization_id:
@@ -50,6 +51,7 @@ class TenantAccess:
             self.connection,
             organization_id=self.organization_id,
             user_id=self.subject.user_id,
+            session_gate=self.session_gate,
         )
         if not policy.permission_code or policy.permission_code not in grants:
             raise AccessDenied
@@ -62,19 +64,25 @@ def tenant_transaction(
     if subject is None:
         raise AccessDenied
     with engine.begin() as connection:
-        identity = {
-            "tenant": requested_organization_id,
-            "subject": str(subject.user_id),
-        }
-        if not connection.execute(
-            text("SELECT public.veriq_active_membership(:tenant, :subject)"), identity
-        ).scalar_one():
-            raise AccessDenied
-        connection.execute(
-            text("""
-                SELECT set_config('veriq.organization_id', :tenant, true),
-                       set_config('veriq.user_id', :subject, true)
-            """),
-            {"tenant": str(requested_organization_id), "subject": str(subject.user_id)},
-        )
-        yield TenantAccess(connection, subject, requested_organization_id)
+        yield _open_tenant_access(connection, subject, requested_organization_id)
+
+
+def _open_tenant_access(
+    connection: Connection,
+    subject: VerifiedSubject,
+    organization_id: UUID,
+    session_gate: SessionGate | None = None,
+) -> TenantAccess:
+    identity = {"tenant": organization_id, "subject": str(subject.user_id)}
+    if not connection.execute(
+        text("SELECT public.veriq_active_membership(:tenant, :subject)"), identity
+    ).scalar_one():
+        raise AccessDenied
+    connection.execute(
+        text("""
+            SELECT set_config('veriq.organization_id', :tenant, true),
+                   set_config('veriq.user_id', :subject, true)
+        """),
+        {"tenant": str(organization_id), "subject": str(subject.user_id)},
+    )
+    return TenantAccess(connection, subject, organization_id, session_gate)
