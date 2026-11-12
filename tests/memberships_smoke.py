@@ -8,6 +8,7 @@ from uuid import uuid4
 COMPOSE = ["docker", "compose", "-f", "compose.yaml", "-f", "compose.dev.yaml"]
 CHECKS = Path(__file__).with_name("membership_checks.py")
 TENANT_CHECKS = Path(__file__).with_name("tenant_checks.py")
+SESSION_CHECKS = Path(__file__).with_name("session_checks.py")
 CHECK_SERVICE_ROLE = """
 import sys
 from sqlalchemy import text
@@ -87,6 +88,7 @@ def main() -> None:
         scratch(database_name, "alembic", "upgrade", "0004")
         scratch(database_name, "python", "-", "legacy-grants", stdin=checks)
         scratch(database_name, "alembic", "upgrade", "0005")
+        scratch(database_name, "alembic", "upgrade", "0006")
         scratch(database_name, "alembic", "upgrade", "head")
         scratch(database_name, "alembic", "current", "--check-heads")
         compose("restart", "postgres")
@@ -98,10 +100,16 @@ def main() -> None:
             "-",
             stdin=TENANT_CHECKS.read_text(encoding="utf-8"),
         )
+        scratch(
+            database_name,
+            "python",
+            "-",
+            stdin=SESSION_CHECKS.read_text(encoding="utf-8"),
+        )
     finally:
         database(f"DROP DATABASE {database_name}")
     print(
-        "Identity smoke: fresh install, 0005 -> 0006 with existing rows, runtime roles and TEN-01 passed."
+        "Identity smoke: fresh install, upgrades through 0007, runtime roles, TEN-01 and sessions passed."
     )
 
 
