@@ -4,4 +4,4 @@ Veriq — мультиарендная платформа для экзамен�
 
 Foundation 1b принят и объединён в `main`. Он добавил PostgreSQL-очередь системных задач, внутренний Redis и worker с короткой SQL-пробой. См. [результат слияния и проверенные ревизии](PROJECT_STATE.md). При продолжении сверь Git и PR, затем загрузи нужную область из [индекса](CONTEXT_INDEX.md).
 
-[Foundation 1c](../../planning/FOUNDATION_1C.md) завершён с внутренними сессиями и tenant-изоляцией. Текущий срез 1d — [Compose overlay](../DEPLOYMENT.md) и [браузерный smoke](../TESTING.md#foundation-1d-browser-smoke). Публичный Auth и изменения утверждённых ADR требуют отдельного согласования. Сохранность Docker-данных проверяй без удаления томов.
+Foundation 1a–1d завершены. Доступны внутренние сессии, tenant-изоляция, [Compose overlay](../DEPLOYMENT.md) и [браузерный smoke](../TESTING.md#foundation-1d-browser-smoke). Следующий этап — [Auth & Account Security](../../planning/AUTH_ACCOUNT_SECURITY.md), план PROPOSED. Реализация Auth и изменения утверждённых ADR требуют согласования. Сохранность Docker-данных проверяй без удаления томов.

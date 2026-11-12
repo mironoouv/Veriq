@@ -2,7 +2,7 @@
 
 | Область | Открыть для задачи |
 |---|---|
-| Auth | [SECURITY](../SECURITY.md), [DATABASE](../DATABASE.md), [API](../API_CONTRACTS.md) |
+| Auth | [План Auth (PROPOSED)](../../planning/AUTH_ACCOUNT_SECURITY.md), [SECURITY](../SECURITY.md), [DATABASE](../DATABASE.md), [API](../API_CONTRACTS.md) |
 | Studio | [ТЗ](../VERIQ_SPEC.md), [API](../API_CONTRACTS.md), [дизайн](../DESIGN_SYSTEM.md) |
 | Exam Engine | [ТЗ](../VERIQ_SPEC.md), [архитектура](../ARCHITECTURE.md), [приёмка](../ACCEPTANCE.md) |
 | Judge | [JUDGE_SPEC](../JUDGE_SPEC.md), [границы доверия](../SECURITY.md), [открытые вопросы](../OPEN_QUESTIONS.md) |

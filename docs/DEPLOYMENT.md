@@ -78,6 +78,14 @@ Browser HTTPS to Nginx at `veriq.void-rp.ru`; API/websocket via same origin to a
 - Deployment: database snapshot/backup, migration checks, expand/contract, rollout with smoke tests and rollback plan.
 
 ## Nginx notes
+Foundation 1d обслуживает короткие HTTP-запросы и health-пробы. Перед
+WebSocket отдельно согласуйте forwarding заголовков Upgrade/Connection,
+таймауты и повторную проверку доступа. Для загрузок отдельно задайте лимиты
+тела, buffering, временное хранилище и обработку отмены. Для длительных HTTP
+операций согласуйте upstream/client timeouts, поведение при отмене и выбор
+между синхронным запросом и worker. Текущие короткие таймауты health-пути
+не являются настройками для этих будущих сценариев.
+
 Forward `Upgrade` headers for WebSocket, proper proxy timeouts, keepalive, request size for uploads, error handling. SFU UDP/TURN bypasses ordinary Nginx HTTP path and must be exposed separately.
 
 ## Production operational checks
