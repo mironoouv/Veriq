@@ -212,3 +212,22 @@ test("serves the app while API is stopped and recovers on retry", async ({
   await expectHealthy(page);
   browser.verify();
 });
+
+test("keeps test Auth endpoints disabled in production", async ({ page }) => {
+  for (const route of ["/auth/csrf", "/me", "/auth/verify-email"]) {
+    expect((await page.request.get("/api/v1" + route)).status()).toBe(404);
+  }
+  for (const route of [
+    "/auth/register",
+    "/auth/login",
+    "/auth/mfa/challenge",
+    "/auth/password-reset/request",
+    "/auth/mfa/recovery",
+    "/organizations/00000000-0000-4000-8000-000000000001/joining",
+    "/organizations/00000000-0000-4000-8000-000000000001/imports/preview",
+  ]) {
+    expect(
+      (await page.request.post("/api/v1" + route, { data: {} })).status(),
+    ).toBe(404);
+  }
+});
