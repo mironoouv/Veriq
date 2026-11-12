@@ -69,16 +69,17 @@ def main() -> None:
         scratch(database_name, "alembic", "current", "--check-heads")
         scratch(database_name, "alembic", "downgrade", "0002")
         scratch(database_name, "python", "-", "seed", stdin=checks)
+        scratch(database_name, "alembic", "upgrade", "0003")
+        scratch(database_name, "python", "-", "upgrade", stdin=checks)
         scratch(database_name, "alembic", "upgrade", "head")
         scratch(database_name, "alembic", "current", "--check-heads")
-        scratch(database_name, "python", "-", "upgrade", stdin=checks)
         compose("restart", "postgres")
         compose("up", "--wait", "--wait-timeout", "90")
-        scratch(database_name, "python", "-", "persist", stdin=checks)
+        scratch(database_name, "python", "-", "roles", stdin=checks)
     finally:
         database(f"DROP DATABASE {database_name}")
     print(
-        "Membership smoke: fresh install, upgrade, constraints, status and PostgreSQL restart passed."
+        "Identity smoke: fresh install, 0002–0004 upgrades, constraints, role scopes and PostgreSQL restart passed."
     )
 
 

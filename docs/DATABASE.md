@@ -22,13 +22,38 @@
 членств по глобальному аккаунту.
 
 Статусы — `pending` по умолчанию, `active`, `suspended`, `revoked`.
-SQLAlchemy-модель отличает активное членство, ведёт версию при ORM-обновлении
-и хранит временные метки с часовым поясом. `joined_at` опционален до оформления
-операции вступления. При появлении авторизации статус проверяется на момент
+SQLAlchemy-модель отличает активное членство и увеличивает версию при ORM-обновлении.
+`joined_at` означает момент первого подтверждённого вступления. Его выставляет
+будущая операция вступления. Приостановка и отзыв сохраняют дату. Старый
+`NULL` означает отсутствие зафиксированной даты и остаётся без backfill.
+`updated_at` получает время PostgreSQL при вставке и при изменении строки через
+ORM. При прямом SQL за обновление метки отвечает пишущий код. Назначение роли
+не меняет строку членства. Метка не заменяет аудит. Статус проверяется на момент
 доступа. Аудит изменений и сохранение исторических ссылок обязательны для
 будущих операций. Срез A добавляет схему и модель без маршрутов членства.
 
-`roles(id,organization_id nullable,code)`; `permissions(id,code)`; `role_permissions(role_id,permission_id)`; `membership_roles(membership_id,role_id)`
+### Роли и разрешения
+
+Ревизия `0004` (Slice B) добавляет таблицы без изменения данных `0003`.
+
+| Таблица | Ключи и назначение |
+|---|---|
+| `permissions` | `(scope, code)` — каталог разрешений области platform или organization |
+| `platform_roles`, `platform_role_assignments` | UUID роли и назначение по `(user_id, role_id)`. Платформенный код — `superadmin` |
+| `platform_role_permissions` | Роль и разрешение области platform |
+| `organization_roles` | `(organization_id, id)`, уникальный код внутри организации. Коды `org_admin`, `teacher`, `proctor`, `student`, `technician` |
+| `organization_role_permissions` | Составной FK на роль организации и FK на разрешение области organization |
+| `membership_roles` | `(organization_id, membership_id, role_id)`. Два составных FK, чтобы членство и роль относились к одной организации |
+
+Раздельные таблицы назначений позволяют выразить границы области обязательными
+FK. Разрешения задаются явными связями. Миграция создаёт пустые каталоги.
+Проверка при записи назначения берёт блокировку строки членства и требует
+`active`. После смены статуса назначения сохраняются, а чтение действующих
+разрешений исключает неактивное членство, отключённый аккаунт и неактивную
+организацию. Смена tenant при чтении меняет выборку без записи назначений.
+
+### Другие таблицы Identity и Academic
+
 `invites(id,organization_id,token_hash,scope,expires_at,uses_left,invited_email_hash,created_by)`
 `join_requests(id,organization_id,user_id,status,reviewed_by,...)`
 `group_join_codes(id,organization_id,group_id,code_hash,expires_at,uses_left,approval_required)`
