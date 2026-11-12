@@ -16,4 +16,4 @@ for probe in ("live", "ready"):
         if json.load(response) != {"status": "ok"}:
             raise RuntimeError(f"Unexpected {probe} response")
 
-print("Veriq web entry point, API liveness and PostgreSQL readiness are healthy.")
+print("Veriq web entry point, API liveness and PostgreSQL/Redis readiness are healthy.")

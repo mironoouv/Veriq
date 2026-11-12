@@ -1,5 +1,5 @@
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import Literal
 from uuid import uuid4
@@ -7,10 +7,12 @@ from uuid import uuid4
 from fastapi import FastAPI, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from redis.exceptions import RedisError
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from veriq.database import create_database_engine
+from veriq.redis_client import create_redis
 
 
 class Health(BaseModel):
@@ -19,7 +21,7 @@ class Health(BaseModel):
 
 class HealthError(BaseModel):
     code: Literal["DEPENDENCY_UNAVAILABLE"] = "DEPENDENCY_UNAVAILABLE"
-    message: str = "Database unavailable"
+    message: str = "Dependency unavailable"
     request_id: str
     details: dict[str, str] = Field(default_factory=dict)
 
@@ -29,9 +31,13 @@ class HealthFailure(BaseModel):
 
 
 def create_app(
-    *, engine: Engine | None = None, enable_docs: bool | None = None
+    *,
+    engine: Engine | None = None,
+    enable_docs: bool | None = None,
+    check_redis: Callable[[], object] | None = None,
 ) -> FastAPI:
     database = engine if engine is not None else create_database_engine()
+    cache = create_redis() if check_redis is None else None
     if enable_docs is None:
         enable_docs = os.environ.get("VERIQ_ENV") == "development"
 
@@ -41,6 +47,8 @@ def create_app(
             yield
         finally:
             database.dispose()
+            if cache is not None:
+                cache.close()
 
     prefix = "/api/v1"
     app = FastAPI(
@@ -61,7 +69,7 @@ def create_app(
         operation_id="healthReady",
         response_model=Health,
         responses={
-            503: {"model": HealthFailure, "description": "Database unavailable"}
+            503: {"model": HealthFailure, "description": "Dependency unavailable"}
         },
     )
     def readiness(response: Response) -> Health | JSONResponse:
@@ -69,7 +77,11 @@ def create_app(
         try:
             with database.connect() as connection:
                 connection.execute(text("SELECT 1"))
-        except SQLAlchemyError:
+            if cache is not None:
+                cache.ping()
+            elif check_redis is not None:
+                check_redis()
+        except (SQLAlchemyError, RedisError):
             failure = HealthFailure(error=HealthError(request_id=str(uuid4())))
             return JSONResponse(
                 status_code=503,
