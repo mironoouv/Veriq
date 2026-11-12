@@ -17,4 +17,4 @@ RUN ruff format --check . && ruff check . && mypy . && pytest
 
 FROM base AS runtime
 USER 10001:10001
-CMD ["uvicorn", "veriq.main:create_app", "--factory", "--host", "0.0.0.0", "--no-access-log"]
+CMD ["uvicorn", "veriq.main:create_app", "--factory", "--host", "0.0.0.0", "--no-proxy-headers", "--no-access-log"]

@@ -8,6 +8,7 @@ from uuid import uuid4
 COMPOSE = ["docker", "compose", "-f", "compose.yaml", "-f", "compose.dev.yaml"]
 CHECKS = Path(__file__).with_name("membership_checks.py")
 TENANT_CHECKS = Path(__file__).with_name("tenant_checks.py")
+AUTH_RATE_CHECKS = Path(__file__).with_name("auth_rate_checks.py")
 SESSION_CHECKS = Path(__file__).with_name("session_checks.py")
 CHECK_SERVICE_ROLE = """
 import sys
@@ -89,6 +90,7 @@ def main() -> None:
         scratch(database_name, "python", "-", "legacy-grants", stdin=checks)
         scratch(database_name, "alembic", "upgrade", "0005")
         scratch(database_name, "alembic", "upgrade", "0006")
+        scratch(database_name, "alembic", "upgrade", "0007")
         scratch(database_name, "alembic", "upgrade", "head")
         scratch(database_name, "alembic", "current", "--check-heads")
         compose("restart", "postgres")
@@ -100,16 +102,24 @@ def main() -> None:
             "-",
             stdin=TENANT_CHECKS.read_text(encoding="utf-8"),
         )
-        scratch(
-            database_name,
-            "python",
-            "-",
-            stdin=SESSION_CHECKS.read_text(encoding="utf-8"),
-        )
+        rate_checks = AUTH_RATE_CHECKS.read_text(encoding="utf-8")
+        compose("exec", "-T", "api", "python", "-", stdin=rate_checks)
+        compose("stop", "redis")
+        try:
+            compose("exec", "-T", "api", "python", "-", "outage", stdin=rate_checks)
+            scratch(
+                database_name,
+                "python",
+                "-",
+                stdin=SESSION_CHECKS.read_text(encoding="utf-8"),
+            )
+        finally:
+            compose("start", "redis")
+            compose("up", "--wait", "--wait-timeout", "90")
     finally:
         database(f"DROP DATABASE {database_name}")
     print(
-        "Identity smoke: fresh install, upgrades through 0007, runtime roles, TEN-01 and sessions passed."
+        "Identity smoke: fresh install, upgrades through 0008, runtime roles, TEN-01 and sessions passed."
     )
 
 
