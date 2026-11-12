@@ -1,6 +1,6 @@
 # Auth & Account Security
 
-**APPROVED с уточнениями. Slice 1–5 приняты. Для Slice 6 разрешено проектирование, детали имеют статус PROPOSED. Следующие срезы требуют отдельного ревью.** Основание: [ТЗ](../docs/VERIQ_SPEC.md), [SECURITY](../docs/SECURITY.md), [DATABASE](../docs/DATABASE.md), [API_CONTRACTS](../docs/API_CONTRACTS.md), [ADR-003](../docs/adr/ADR-003-onboarding.md), [ADR-014](../docs/adr/ADR-014-mfa.md), [ADR-015](../docs/adr/ADR-015-mfa-recovery.md), [AUTH-01–03 и TEN-01](../docs/ACCEPTANCE.md). Пути ниже относительны к `/api/v1`. Новые маршруты и поля — предложения к OpenAPI; действующие ADR сохраняются.
+**APPROVED с уточнениями. Slice 1–5 приняты. Архитектура обычного восстановления Slice 6 одобрена с уточнениями. Офлайн-процедура закрыта до отдельного допуска. Следующие срезы требуют отдельного ревью.** Основание: [ТЗ](../docs/VERIQ_SPEC.md), [SECURITY](../docs/SECURITY.md), [DATABASE](../docs/DATABASE.md), [API_CONTRACTS](../docs/API_CONTRACTS.md), [ADR-003](../docs/adr/ADR-003-onboarding.md), [ADR-014](../docs/adr/ADR-014-mfa.md), [ADR-015](../docs/adr/ADR-015-mfa-recovery.md), [AUTH-01–03 и TEN-01](../docs/ACCEPTANCE.md). Пути ниже относительны к `/api/v1`. Новые маршруты и поля — предложения к OpenAPI; действующие ADR сохраняются.
 
 ## Границы доверия
 
@@ -49,7 +49,7 @@
 
 ### 6. Независимое восстановление MFA
 
-[Проект Slice 6 (PROPOSED)](AUTH_MFA_RECOVERY.md).
+[Утверждённая архитектура Slice 6](AUTH_MFA_RECOVERY.md).
 
 - **Данные.** `mfa_recovery_requests` с целевым аккаунтом, статусом, доказательствами минимального объёма, независимым reviewer, временем решения и cooldown. Ревизия и одноразовое применение. Отдельный ограниченный recovery proof может завершить только переустановку фактора, без tenant-доступа.
 - **API.** `POST /auth/mfa/recovery`; предложения для scoped review, approve/reject и redeem. Привилегированный аккаунт без резервного кода требует независимой проверки, а reviewer — соответствующих полномочий и step-up. Почта сама по себе не сбрасывает привилегированную MFA. При восстановлении отозвать нужные сессии и старые факторы/коды, уведомить владельца, требовать повторное enrollment.
