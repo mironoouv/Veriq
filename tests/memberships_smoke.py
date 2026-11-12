@@ -11,6 +11,7 @@ TENANT_CHECKS = Path(__file__).with_name("tenant_checks.py")
 REGISTRATION_CHECKS = Path(__file__).with_name("registration_checks.py")
 AUTH_RATE_CHECKS = Path(__file__).with_name("auth_rate_checks.py")
 MFA_RECOVERY_CHECKS = Path(__file__).with_name("mfa_recovery_checks.py")
+JOINING_CHECKS = Path(__file__).with_name("organization_joining_checks.py")
 PASSWORD_CHECKS = Path(__file__).with_name("password_recovery_checks.py")
 MFA_CHECKS = Path(__file__).with_name("mfa_checks.py")
 SESSION_CHECKS = Path(__file__).with_name("session_checks.py")
@@ -173,8 +174,19 @@ def main() -> None:
         )
     finally:
         database(f"DROP DATABASE {database_name}")
+    joining_db = f"joining_test_{uuid4().hex}"
+    joining_checks = JOINING_CHECKS.read_text(encoding="utf-8")
+    database(f"CREATE DATABASE {joining_db}")
+    try:
+        scratch(joining_db, "alembic", "upgrade", "0013")
+        scratch(joining_db, "python", "-", "seed", stdin=joining_checks)
+        scratch(joining_db, "alembic", "upgrade", "head")
+        scratch(joining_db, "alembic", "current", "--check-heads")
+        scratch(joining_db, "python", "-", stdin=joining_checks)
+    finally:
+        database(f"DROP DATABASE {joining_db}")
     print(
-        "Identity smoke: fresh install, upgrades through 0013, runtime roles, TEN-01 and sessions passed."
+        "Identity smoke: fresh install, upgrades through 0014, runtime roles, TEN-01 and sessions passed."
     )
 
 

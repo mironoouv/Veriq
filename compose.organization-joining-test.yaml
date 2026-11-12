@@ -1,0 +1,5 @@
+# Combine with compose.yaml, compose.login-test.yaml and optionally compose.mfa-test.yaml.
+services:
+  api:
+    environment:
+      VERIQ_ENABLE_TEST_ORGANIZATION_JOINING: "1"

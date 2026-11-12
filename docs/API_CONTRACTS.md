@@ -108,3 +108,27 @@ GET `/auth/verify-email` показывает изолированную фор�
 - `POST .../{case}/enrollment` принимает capability, email и пароль и возвращает seed для подключения TOTP. `POST .../{case}/complete` принимает capability и TOTP и возвращает резервные коды. Обычная сессионная cookie не выдаётся.
 
 Все запросы используют Origin, CSRF и `no-store`. Чужой или отсутствующий кейс и недействующее разрешение возвращают одинаковый отказ. Redis закрывает новые операции при недоступности.
+
+## Auth Slice 7 (test HTTPS)
+
+POST /api/v1/organizations/{organization_id}/joining accepts one action and
+only its fields. Every action requires the existing session cookie, exact
+HTTPS Origin, CSRF and Redis. The endpoint is enabled only by the explicit
+test overlay. Secrets are sent in JSON and issuance responses use no-store.
+
+| action | Additional fields | Result |
+|---|---|---|
+| issue_invite | recipient_id, enabled (explicit activation) | issued, object_id, secret |
+| issue_code | quota | issued, object_id, secret |
+| revoke_invite / revoke_code | object_id | revoked |
+| redeem_invite / redeem_code | object_id, secret | active or pending; pending includes request_id |
+| set_intake | enabled | enabled or disabled |
+| apply | none | active or pending; pending includes request_id |
+| approve / reject | object_id (request ID) | active or revoked |
+| status | none | caller's own membership status |
+
+Staff operations require a session scoped to the organization, the current
+organization.join.manage permission, and a sensitive step-up within 5 minutes.
+A known organization UUID alone cannot be used to apply unless staff opened
+intake explicitly. Invalid scope, expired or revoked secrets and forbidden
+transitions return the same JOINING_DENIED response.

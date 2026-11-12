@@ -176,3 +176,22 @@ Reset использует подтверждённый email и отдельн�
 Выпуск отзывает сессии, удаляет прежний фактор и связанные коды и challenges, увеличивает `credential_version` и включает hold. Запрос, пароль, email, password reset и обычная сессия не снимают hold. Сотрудник с независимыми полномочиями может остановить кейс и вернуть его на проверку. Истечение или исчерпание попыток оставляет hold, новый кейс проходит те же этапы. Enrollment привязан к capability, подтверждённому паролю, браузерному nonce и версии. Новый TOTP активируется вместе с резервными кодами, погашением разрешения и снятием hold. Сессия появляется только после нового обычного входа.
 
 Поток включается только тестовым overlay. Superadmin исключён из обычной процедуры. Для офлайн-восстановления утверждена архитектура 2 из 3, а назначение хранителей, аппаратные ключи, верификатор манифеста, исполнение, ротация и учение остаются до отдельного допуска. Регламент хранения, production SMTP и интерфейс назначения и ведения кейсов через доверенную поддержку также остаются эксплуатационными зависимостями.
+
+### Organization joining trust boundary
+
+The test HTTPS adapter uses the existing session cookie and performs exact
+Origin/CSRF validation before rate limiting. Redis limits the trusted peer IP
+and a keyed session identifier. Its failure stops the operation before SQL.
+Only veriq_api has EXECUTE on the joining entry point. The existing NOLOGIN
+session store owns it. The fixed search_path, function-local tenant setting,
+FORCE RLS and operation-specific predicates constrain the definer. The API and
+worker have no direct access to onboarding tables. The audit writer has INSERT
+only. Secrets, session cookies and request bodies are excluded from audit.
+
+The function locks the actor and subject in sorted order, then takes the
+existing exclusive authority guard before revalidating the session, MFA,
+permission and state. Membership writes use the same guard through the Slice 6
+trigger. It serializes onboarding changes with authority revocation globally;
+evaluate contention before public use. Applicant membership transitions and
+audit commit together. Issued secrets are returned once for separate delivery.
+There is no mail delivery or classroom integration in this slice.

@@ -246,3 +246,19 @@ Foundation 1b добавляет ревизию `0002` с системной т�
 - `mfa_recovery_requests` хранит состояния и снимки полномочий, `mfa_recovery_actions` — идемпотентные действия, `mfa_recovery_holds` — отдельный запрет обычной аутентификации, `mfa_recovery_enrollments` — digest, привязку к браузеру, срок, попытки и временный зашифрованный фактор. RLS включён и принудителен на заявках. Обычная runtime-роль работает через фиксированные функции.
 - Выдача и проверки полномочий сериализованы с мутациями ролей и членств. Порядок для recovery — сортированные блокировки аккаунтов, общая блокировка проверки полномочий, строка кейса. Триггеры мутаций берут исключительную блокировку и меняют ревизию. Изменение общей ревизии консервативно инвалидирует и ранее одобренные незавершённые кейсы других областей. Снимок включает `grant_epoch` проверяющего и версии credentials сотрудников.
 - `mfa_recovery_approver` и `mfa_recovery_verifier` — явно назначаемые платформенные роли. Права организации задаются существующими role permissions. Полномочия не выдаются существующим аккаунтам миграцией. Сверяются область сессии, активное членство и право. Повтор release не возвращает секрет. Откат требует отсутствия истории recovery и назначений новых ролей.
+
+### Auth Slice 7 organization joining
+
+Revision 0014 adds address-bound invitations, organization codes, join requests,
+intake settings and an append-only audit table. The three-way membership FK
+binds organization, membership and account. Pending requests are unique per
+membership. Invitations have one use and a maximum TTL of 72 hours. Organization
+codes have a 24-hour TTL and a quota of 1–1000. Issued secrets are random 256-bit
+values. PostgreSQL stores SHA-256 digests. Downgrade requires empty onboarding
+tables and leaves existing users, memberships and sessions intact.
+
+The migration grants organization.join.manage to existing Org Admin roles.
+Future tenant provisioning must grant it explicitly. Requests and organization
+codes create pending memberships. An activating invitation can create a new
+active membership. An existing pending membership goes through moderation.
+No operation inserts a role assignment.
