@@ -11,13 +11,23 @@ from uuid import UUID, uuid4
 
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 from cryptography.exceptions import InvalidTag
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from redis.asyncio import Redis
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.responses import HTMLResponse, JSONResponse, Response
 
+from veriq.academic_catalog import (
+    AcademicCatalog,
+    CatalogArchive,
+    CatalogConflict,
+    CatalogEdit,
+    CatalogInput,
+    CatalogKind,
+    CatalogPage,
+    CatalogRow,
+)
 from veriq.auth_audit import AuthEvent, AuthResult, RequestContext, append_attempt
 from veriq.auth_credentials import CredentialProof, CredentialVerifier
 from veriq.auth_rate_limit import (
@@ -1007,5 +1017,129 @@ def browser_router(
             except SQLAlchemyError:
                 return _error(context, "SERVICE_UNAVAILABLE", 503)
             return JSONResponse(result, headers=HEADERS)
+
+    if os.environ.get("VERIQ_ENABLE_TEST_ACADEMIC_CATALOG") == "1":
+        catalog = AcademicCatalog(sessions)
+        catalog_path = "/organizations/{organization_id}/academic/{kind}"
+
+        @router.get(catalog_path, response_model=CatalogPage)
+        async def catalog_read(
+            organization_id: UUID,
+            kind: CatalogKind,
+            request: Request,
+            archived: bool = False,
+            query: str = Query(default="", max_length=160),
+            page: int = Query(default=1, ge=1, le=10000),
+        ) -> Response:
+            context = RequestContext.new()
+            try:
+                result = await asyncio.to_thread(
+                    catalog.read,
+                    SessionToken(request.cookies.get(SESSION, "")),
+                    organization_id,
+                    kind,
+                    None,
+                    archived,
+                    query,
+                    page,
+                )
+            except AccessDenied:
+                return _error(context, "CATALOG_DENIED", 404)
+            except SQLAlchemyError:
+                return _error(context, "SERVICE_UNAVAILABLE", 503)
+            return JSONResponse(result.model_dump(mode="json"), headers=HEADERS)
+
+        @router.get(catalog_path + "/{item_id}", response_model=CatalogRow)
+        async def catalog_card(
+            organization_id: UUID,
+            kind: CatalogKind,
+            item_id: UUID,
+            request: Request,
+        ) -> Response:
+            context = RequestContext.new()
+            try:
+                result = await asyncio.to_thread(
+                    catalog.read,
+                    SessionToken(request.cookies.get(SESSION, "")),
+                    organization_id,
+                    kind,
+                    item_id,
+                    False,
+                    "",
+                    1,
+                )
+            except AccessDenied:
+                return _error(context, "CATALOG_DENIED", 404)
+            except SQLAlchemyError:
+                return _error(context, "SERVICE_UNAVAILABLE", 503)
+            return JSONResponse(result.model_dump(mode="json"), headers=HEADERS)
+
+        async def catalog_write(
+            organization_id: UUID,
+            kind: CatalogKind,
+            item_id: UUID | None,
+            request: Request,
+            schema: type[CatalogInput] | type[CatalogArchive],
+        ) -> Response:
+            context = RequestContext.new()
+            if not csrf_valid(request):
+                return _error(context, "CSRF_DENIED", 403)
+            try:
+                if item_id is None:
+                    item_id = UUID(request.headers.get("Idempotency-Key", ""))
+                result = await asyncio.to_thread(
+                    catalog.write,
+                    SessionToken(request.cookies.get(SESSION, "")),
+                    organization_id,
+                    kind,
+                    item_id,
+                    schema.model_validate(await _payload(request)),
+                    context.request_id,
+                )
+            except (ValueError, RecursionError):
+                return _error(context, "INVALID_REQUEST", 400)
+            except AccessDenied:
+                return _error(context, "CATALOG_DENIED", 404)
+            except CatalogConflict:
+                return _error(context, "CATALOG_CONFLICT", 409)
+            except SQLAlchemyError:
+                return _error(context, "SERVICE_UNAVAILABLE", 503)
+            return JSONResponse(result.model_dump(mode="json"), headers=HEADERS)
+
+        @router.post(
+            catalog_path,
+            response_model=CatalogRow,
+            openapi_extra=_body_schema(CatalogInput),
+        )
+        async def catalog_create(
+            organization_id: UUID, kind: CatalogKind, request: Request
+        ) -> Response:
+            return await catalog_write(
+                organization_id, kind, None, request, CatalogInput
+            )
+
+        @router.patch(
+            catalog_path + "/{item_id}",
+            response_model=CatalogRow,
+            openapi_extra=_body_schema(CatalogEdit),
+        )
+        async def catalog_edit(
+            organization_id: UUID, kind: CatalogKind, item_id: UUID, request: Request
+        ) -> Response:
+            return await catalog_write(
+                organization_id, kind, item_id, request, CatalogEdit
+            )
+
+        @router.post(
+            catalog_path + "/{item_id}/archive",
+            response_model=CatalogRow,
+            openapi_extra=_body_schema(CatalogArchive),
+        )
+        async def catalog_archive(
+            organization_id: UUID, kind: CatalogKind, item_id: UUID, request: Request
+        ) -> Response:
+            return await catalog_write(
+                organization_id, kind, item_id, request, CatalogArchive
+            )
 
     return router

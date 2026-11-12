@@ -2,6 +2,7 @@ import { createPinia } from "pinia";
 import { createApp } from "vue";
 import { createI18n } from "vue-i18n";
 import { createRouter, createWebHistory } from "vue-router";
+import AcademicCatalogView from "./AcademicCatalogView.vue";
 import App from "./App.vue";
 import StatusView from "./StatusView.vue";
 import "./style.css";
@@ -40,6 +41,7 @@ const router = createRouter({
   routes: [
     { path: "/", component: StatusView },
     { path: "/status", component: StatusView },
+    { path: "/academic/:organizationId", component: AcademicCatalogView },
     { path: "/:pathMatch(.*)*", redirect: "/" },
   ],
 });

@@ -11,7 +11,7 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const webRequire = createRequire(
   new URL("../apps/web/package.json", import.meta.url),
 );
-const { chromium } = webRequire("@playwright/test");
+const { chromium, expect: browserExpect } = webRequire("@playwright/test");
 const working = mkdtempSync(join(tmpdir(), "veriq-auth-"));
 const port = process.env.VERIQ_AUTH_E2E_PORT ?? "18459";
 const origin = `https://127.0.0.1:${port}`;
@@ -49,6 +49,7 @@ const overlays = [
   "compose.mfa-recovery-test.yaml",
   "compose.organization-joining-test.yaml",
   "compose.bulk-import-test.yaml",
+  "compose.academic-catalog-test.yaml",
   join(working, "scratch.yaml"),
 ].flatMap((file) => ["-f", file]);
 
@@ -353,6 +354,126 @@ function runtimePrivileges() {
     ROLLBACK;
   `);
 }
+async function catalogJourney(operator, org, other) {
+  const base = `/organizations/${org}/academic/courses`;
+  const denied = await operator.context.request.post(
+    origin + "/api/v1" + base,
+    {
+      headers: { Origin: origin, "Idempotency-Key": randomUUID() },
+      data: { title: "No CSRF" },
+    },
+  );
+  check(denied.status() === 403, "catalog accepted mutation without CSRF");
+
+  const bootstrap = await operator.context.request.get(
+    origin + "/api/v1/auth/csrf",
+    {
+      headers: { "X-Veriq-CSRF-Bootstrap": "1" },
+    },
+  );
+  check(bootstrap.ok(), "catalog CSRF bootstrap failed");
+  const foreign = await operator.context.request.post(
+    origin + "/api/v1" + base,
+    {
+      headers: {
+        Origin: "https://example.invalid",
+        "Idempotency-Key": randomUUID(),
+        "X-CSRF-Token": (await bootstrap.json()).csrf_token,
+      },
+      data: { title: "Wrong origin" },
+    },
+  );
+  check(foreign.status() === 403, "catalog accepted a foreign Origin");
+  const page = await operator.context.newPage();
+  const dist = join(root, "apps/web/dist");
+  await page.route(origin + "/academic/**", (route) =>
+    route.fulfill({
+      path: join(dist, "index.html"),
+      contentType: "text/html",
+    }),
+  );
+  await page.route(origin + "/assets/**", (route) => {
+    const asset = new URL(route.request().url()).pathname.split("/").at(-1);
+    check(
+      asset && /^[a-zA-Z0-9._-]+$/.test(asset),
+      "invalid fixture asset path",
+    );
+    return route.fulfill({ path: join(dist, "assets", asset) });
+  });
+  phase = "Academic catalog Vue assets and initial render";
+  await page.goto(origin + "/academic/" + org);
+  await browserExpect(
+    page.getByRole("heading", { name: "Учебная структура" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Создать" }).click();
+  await page.getByRole("textbox", { name: "Название" }).fill("Каталог fixture");
+  await page.getByRole("textbox", { name: "Описание" }).fill("Описание курса");
+  await page.getByRole("button", { name: "Сохранить" }).click();
+  phase = "Academic catalog Vue create, edit and archive";
+  const row = page.getByRole("row", { name: /Каталог fixture/ });
+  await browserExpect(row).toBeVisible();
+  await row.getByRole("button", { name: "Редактировать" }).click();
+  await page
+    .getByRole("textbox", { name: "Название" })
+    .fill("Архивируемый курс");
+  await page.getByRole("button", { name: "Сохранить" }).click();
+  const revised = page.getByRole("row", { name: /Архивируемый курс/ });
+  await revised.getByRole("button", { name: "Архивировать" }).click();
+  await page
+    .getByRole("group", { name: "Архивировать" })
+    .getByRole("button", { name: "Архивировать" })
+    .click();
+  await browserExpect(revised).toHaveCount(0);
+  await page
+    .getByRole("combobox", { name: "Архив", exact: true })
+    .selectOption({ label: "Архив" });
+  await browserExpect(revised).toBeVisible();
+  await page
+    .getByRole("textbox", { name: "Поиск по названию" })
+    .fill("нет совпадения");
+  await browserExpect(page.getByText("Записей нет")).toBeVisible();
+  await page.getByRole("textbox", { name: "Поиск по названию" }).fill("");
+  await browserExpect(revised).toBeVisible();
+
+  phase = "Academic catalog Vue group creation and tenant switch";
+  const catalogSelect = page.getByRole("combobox", {
+    name: "Учебная структура",
+  });
+  await catalogSelect.selectOption("study_groups");
+  await page
+    .getByRole("combobox", { name: "Архив", exact: true })
+    .selectOption({ label: "Активные" });
+  await page.getByRole("button", { name: "Создать" }).click();
+  await page.getByRole("textbox", { name: "Название" }).fill("Группа fixture");
+  await page.getByRole("button", { name: "Сохранить" }).click();
+  const group = page.getByRole("row", { name: /Группа fixture/ });
+  await browserExpect(group).toBeVisible();
+  await expect(
+    operator,
+    "/auth/sessions/rotate",
+    { organization_id: other },
+    204,
+  );
+  await page.evaluate((tenant) => {
+    history.pushState({}, "", "/academic/" + tenant);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }, other);
+  await browserExpect(page.getByRole("alert")).toContainText(
+    "Недостаточно прав",
+  );
+  await browserExpect(group).toHaveCount(0);
+  await page.getByRole("combobox", { name: "Язык" }).selectOption("en");
+  await browserExpect(
+    page.getByRole("heading", { name: "Academic catalog" }),
+  ).toBeVisible();
+  await page.close();
+  await expect(
+    operator,
+    "/auth/sessions/rotate",
+    { organization_id: org },
+    204,
+  );
+}
 async function run(browser) {
   const client = await browserClient(browser);
   const password = randomBytes(24).toString("hex");
@@ -477,7 +598,10 @@ async function run(browser) {
     INSERT INTO organization_roles VALUES ('${org}','${staffId}','org_admin');
     INSERT INTO organization_role_permissions (organization_id,role_id,permission_code) VALUES
       ('${org}','${staffId}','organization.join.manage'),
-      ('${org}','${staffId}','organization.import.manage');
+      ('${org}','${staffId}','organization.import.manage'),
+      ('${org}','${staffId}','academic.catalog.read'),
+      ('${org}','${staffId}','academic.catalog.archive'),
+      ('${org}','${staffId}','academic.catalog.manage');
     INSERT INTO membership_roles (organization_id,membership_id,role_id) VALUES ('${org}','${staffId}','${staffId}');
     INSERT INTO mfa_recovery_sources(user_id,organization_id,source_id) VALUES ('${staffId}','${org}',gen_random_uuid());
   `);
@@ -699,6 +823,8 @@ async function run(browser) {
   await importTiming(operator, importRoute, sampledAddress.email);
   runtimePrivileges();
 
+  phase = "Academic catalog Vue and HTTPS tenant switch";
+  await catalogJourney(operator, org, other);
   phase = "independent recovery, reset and outage";
   await expect(operator, "/auth/mfa/recovery", staff, 202);
   const caseId = sql(

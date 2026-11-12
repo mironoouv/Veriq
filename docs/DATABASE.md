@@ -283,3 +283,19 @@ The worker purges at most 25 expired batches each minute, cascading to staged
 rows. Access expires before physical cleanup and successful rows discard email.
 Audit retains identifiers and action timestamps without email. Future Org Admin
 provisioning explicitly grants organization.import.manage where intended.
+
+### Academic Slice 1
+
+Revision 0016 adds courses and study_groups with composite primary keys
+(organization_id,id), title, optional description, active/archived state,
+creation and update timestamps and optimistic version. They are independent.
+Lists index organization, status, title and ID. A creation digest binds the
+idempotency key to the original payload.
+
+Both tables use ENABLE/FORCE RLS with live scoped permission checks. API has
+no delete privilege. Each successful create, edit and archive appends an
+academic_catalog_events record with same-tenant foreign keys and request ID.
+Mutations use the shared authority guard before acquiring the session row
+lock, so permission revocation and writes serialize. Existing Org Admin
+roles receive catalog permissions in the migration. New roles need explicit
+provisioning. Downgrade refuses non-empty catalogs.

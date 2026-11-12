@@ -46,3 +46,6 @@
 - Auth Slice 1–9 завершены в согласованном тестовом объёме. [PR #19](https://github.com/mironoouv/Veriq/pull/19) объединён squash-коммитом `d4f6365b6178b336af8c22666d2e1a5517a70a7d`. Main синхронизирован, миграция `0015` присутствует. [CI на main](https://github.com/mironoouv/Veriq/actions/runs/43304633627).
 - Public Auth = NOT READY. Публичные Auth endpoints выключены. [Открытые задачи](KNOWN_ISSUES.md) и [Security Validation Report](../AUTH_SECURITY_VALIDATION.md).
 - Следующий этап по ROADMAP — Academic & Studio. [План](../../planning/ACADEMIC_STUDIO.md) имеет статус PROPOSED. Код новой подсистемы ждёт архитектурного ревью.
+
+- [PR #20](https://github.com/mironoouv/Veriq/pull/20) принят с уточнениями и объединён squash-коммитом `9b7cd769984288980ea903d732410cff06c2ee09`. Локальный main обновлён. [План Academic & Studio](../../planning/ACADEMIC_STUDIO.md) APPROVED для Slice 1. [CI PR #20](https://github.com/mironoouv/Veriq/actions/runs/43306043556) прошёл.
+- Slice 1 в ветке `feature/academic-01-catalog`: ревизия `0016`, изолированный каталог courses и study_groups, архив и тестовый HTTPS API/Vue. Slice 2 ждёт ревью. Public Auth остаётся NOT READY.
