@@ -119,6 +119,10 @@ Production overlay запланирован для следующего этап
 
 ## Статус разработки
 
+Foundation 1d добавляет отдельный production-ориентированный Compose overlay
+и браузерный smoke. См. [развёртывание и откат](docs/DEPLOYMENT.md) и
+[инструкцию Playwright](docs/TESTING.md#foundation-1d-browser-smoke).
+
 Foundation 1b добавляет Redis и отдельный процесс фоновых задач. См. [устройство очереди и проверку восстановления](services/worker/README.md).
 
 Foundation 1a включает Vue 3 / TypeScript, FastAPI, SQLAlchemy, Alembic и PostgreSQL.

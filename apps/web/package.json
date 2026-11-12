@@ -10,7 +10,8 @@
     "dev": "vite",
     "build": "vite build",
     "check:types": "vue-tsc --noEmit",
-    "check:format": "prettier --check ."
+    "check:format": "prettier --check .",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "pinia": "4.1.0",
@@ -19,6 +20,7 @@
     "vue-router": "4.6.4"
   },
   "devDependencies": {
+    "@playwright/test": "1.65.0",
     "@tailwindcss/vite": "4.3.5",
     "@types/node": "^24.0.0",
     "@vitejs/plugin-vue": "6.0.10",

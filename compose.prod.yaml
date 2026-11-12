@@ -1,0 +1,66 @@
+name: veriq-prod
+
+x-runtime: &runtime
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+
+services:
+  postgres:
+    <<: *runtime
+    image: postgres:17.11-bookworm@sha256:665dc7b37ac52a17e298511414c21d23ffa4e6a6ef6225b3e5d59c7afb35e994
+    user: postgres
+    tmpfs:
+      - /var/run/postgresql:uid=999,gid=999,mode=0770
+      - /tmp
+    stop_grace_period: 60s
+
+  redis:
+    <<: *runtime
+    image: redis:8.2.11-bookworm@sha256:b0b01167ff47bc3868e56a967895a26be4230891a1f42a78ab61cdd227accc8d
+    user: redis
+    tmpfs: [/data, /tmp]
+
+  migrate:
+    <<: *runtime
+    restart: "no"
+    tmpfs: [/tmp]
+
+  api:
+    <<: *runtime
+    init: true
+    tmpfs: [/tmp]
+    environment:
+      VERIQ_ENV: production
+    command: ["uvicorn", "veriq.main:create_app", "--factory", "--host", "0.0.0.0", "--no-access-log", "--timeout-graceful-shutdown", "20"]
+    stop_grace_period: 30s
+
+  worker:
+    <<: *runtime
+    init: true
+    tmpfs: [/tmp]
+
+  web:
+    <<: *runtime
+    build:
+      context: ./apps/web
+      target: production
+    ports:
+      - "127.0.0.1:${VERIQ_PROD_WEB_PORT:?Use --env-file .env.prod and set VERIQ_PROD_WEB_PORT}:8080"
+    networks: [app, edge]
+    tmpfs: [/tmp]
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/_health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    stop_grace_period: 15s
+
+networks:
+  app:
+    internal: true
+  edge:

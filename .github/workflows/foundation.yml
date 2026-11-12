@@ -16,6 +16,13 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: Scan tracked Git history for secrets
+        run: |
+          docker run --rm -v "$PWD:/repo:ro" \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/repo \
+            ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            git --log-opts="--all" --redact=100 --no-banner /repo
       - name: Configure ephemeral database
         run: |
           for variable in VERIQ_DB_PASSWORD VERIQ_API_DB_PASSWORD VERIQ_WORKER_DB_PASSWORD; do
@@ -57,5 +64,47 @@ jobs:
       - name: Verify background worker and Redis recovery
         run: python3 tests/worker_smoke.py
       - name: Stop stack
+        if: always()
+        run: docker compose down
+
+  production:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      COMPOSE_FILE: compose.yaml:compose.prod.yaml
+      COMPOSE_PROJECT_NAME: veriq-prod-ci
+      VERIQ_PROD_WEB_PORT: 8080
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        with:
+          node-version: 24.13.1
+          package-manager-cache: false
+      - name: Configure ephemeral database
+        run: |
+          for variable in VERIQ_DB_PASSWORD VERIQ_API_DB_PASSWORD VERIQ_WORKER_DB_PASSWORD; do
+            password="$(openssl rand -hex 32)"
+            echo "::add-mask::$password"
+            echo "$variable=$password" >> "$GITHUB_ENV"
+          done
+      - name: Install locked browser test dependencies
+        working-directory: apps/web
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Validate and start production Compose
+        run: |
+          docker compose config --quiet
+          docker compose up --build --wait --wait-timeout 120
+          docker compose run --no-deps --rm -T migrate alembic current --check-heads
+      - name: Exercise Chromium against the production stack
+        run: npm --prefix apps/web run test:e2e
+      - name: Verify health, network exposure and secret handling
+        run: |
+          docker compose up --wait --wait-timeout 90
+          python3 tests/production_checks.py
+      - name: Stop production stack
         if: always()
         run: docker compose down

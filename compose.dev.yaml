@@ -3,7 +3,9 @@ services:
     environment:
       VERIQ_ENV: development
   web:
-    build: ./apps/web
+    build:
+      context: ./apps/web
+      target: development
     environment:
       VERIQ_API_ORIGIN: http://api:8000
     ports:
