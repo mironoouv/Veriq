@@ -3,13 +3,24 @@
 import os
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import timedelta
 from hashlib import sha256
 from threading import Barrier
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import Connection, Engine, create_engine, event, text
 from sqlalchemy.exc import DBAPIError
+from veriq.auth_audit import (
+    AuthEvent,
+    AuthResult,
+    Notice,
+    RequestContext,
+    acknowledge_notice,
+    append_attempt,
+    claim_notice,
+)
+from veriq.auth_credentials import CredentialProof, CredentialVerifier
 from veriq.database import create_database_engine, database_url
 from veriq.sessions import MfaLevel, SessionPolicy, Sessions, SessionToken
 from veriq.tenant_access import (
@@ -75,8 +86,9 @@ def session_id(token: SessionToken) -> UUID:
     return UUID(hex=token.value[:32])
 
 
-def lifecycle_checks(owner: Engine, sessions: Sessions) -> None:
-    token = sessions.issue(MULTI, mfa_level=MfaLevel.PRIMARY, organization_id=B)
+def lifecycle_checks(owner: Engine, issuance: "Issuance") -> None:
+    sessions = issuance.sessions
+    token = issuance.issue(MULTI, mfa_level=MfaLevel.PRIMARY, organization_id=B)
     assert token.value not in repr(token)
     assert sessions.resolve(token).user_id == MULTI.user_id
     with owner.begin() as connection:
@@ -101,9 +113,9 @@ def lifecycle_checks(owner: Engine, sessions: Sessions) -> None:
     denied(lambda: sessions.resolve(token))
     denied(lambda: sessions.rotate(token, organization_id=B))
 
-    first = sessions.issue(MULTI, mfa_level=MfaLevel.PRIMARY)
-    second = sessions.issue(MULTI, mfa_level=MfaLevel.PRIMARY, organization_id=B)
-    other = sessions.issue(OUTSIDER, mfa_level=MfaLevel.PRIMARY)
+    first = issuance.issue(MULTI, mfa_level=MfaLevel.PRIMARY)
+    second = issuance.issue(MULTI, mfa_level=MfaLevel.PRIMARY, organization_id=B)
+    other = issuance.issue(OUTSIDER, mfa_level=MfaLevel.PRIMARY)
     assert sessions.revoke(token, all_for_account=True) == 0
     assert sessions.revoke(first, all_for_account=True) == 2
     denied(lambda: sessions.resolve(first))
@@ -111,9 +123,10 @@ def lifecycle_checks(owner: Engine, sessions: Sessions) -> None:
     assert sessions.resolve(other).user_id == OUTSIDER.user_id
 
 
-def expiry_checks(owner: Engine, sessions: Sessions, api: Engine) -> None:
-    idle = sessions.issue(MULTI, mfa_level=MfaLevel.PRIMARY)
-    absolute = sessions.issue(MULTI, mfa_level=MfaLevel.PRIMARY)
+def expiry_checks(owner: Engine, issuance: "Issuance", api: Engine) -> None:
+    sessions = issuance.sessions
+    idle = issuance.issue(MULTI, mfa_level=MfaLevel.PRIMARY)
+    absolute = issuance.issue(MULTI, mfa_level=MfaLevel.PRIMARY)
     with owner.begin() as connection:
         connection.execute(
             text("""
@@ -149,17 +162,18 @@ def expiry_checks(owner: Engine, sessions: Sessions, api: Engine) -> None:
     denied(lambda: sessions.resolve(absolute))
 
 
-def tenant_checks(owner: Engine, sessions: Sessions) -> None:
-    denied(lambda: sessions.issue(MULTI, mfa_level=MfaLevel.PRIMARY, organization_id=A))
+def tenant_checks(owner: Engine, issuance: "Issuance") -> None:
+    sessions = issuance.sessions
+    denied(lambda: issuance.issue(MULTI, mfa_level=MfaLevel.PRIMARY, organization_id=A))
     denied(
-        lambda: sessions.issue(OUTSIDER, mfa_level=MfaLevel.VERIFIED, organization_id=B)
+        lambda: issuance.issue(OUTSIDER, mfa_level=MfaLevel.VERIFIED, organization_id=B)
     )
     denied(
-        lambda: sessions.issue(
+        lambda: issuance.issue(
             SUPERADMIN, mfa_level=MfaLevel.VERIFIED, organization_id=A
         )
     )
-    primary = sessions.issue(MULTI, mfa_level=MfaLevel.PRIMARY, organization_id=B)
+    primary = issuance.issue(MULTI, mfa_level=MfaLevel.PRIMARY, organization_id=B)
     denied(lambda: sessions.rotate(primary, organization_id=A))
     assert sessions.resolve(primary).organization_id == B
     with sessions.tenant(primary) as access:
@@ -185,7 +199,7 @@ def tenant_checks(owner: Engine, sessions: Sessions) -> None:
             {"org": B, "member": MEMBER_B, "role": ROLE_TECH},
         )
 
-    admin = sessions.issue(MULTI, mfa_level=MfaLevel.VERIFIED, organization_id=A)
+    admin = issuance.issue(MULTI, mfa_level=MfaLevel.VERIFIED, organization_id=A)
     with sessions.tenant(admin) as access:
         access.require(ADMIN_POLICY, TenantResource(A))
         denied(lambda: access.require(STUDENT_POLICY, TenantResource(B)))
@@ -238,8 +252,9 @@ def tenant_checks(owner: Engine, sessions: Sessions) -> None:
     denied(lambda: sessions.resolve(rotated))
 
 
-def concurrency_checks(owner: Engine, sessions: Sessions) -> None:
-    token = sessions.issue(MULTI, mfa_level=MfaLevel.PRIMARY)
+def concurrency_checks(owner: Engine, issuance: "Issuance") -> None:
+    sessions = issuance.sessions
+    token = issuance.issue(MULTI, mfa_level=MfaLevel.PRIMARY)
     read_activity = text(
         "SELECT last_seen_at, absolute_expires_at FROM auth_sessions WHERE id = :id"
     )
@@ -285,11 +300,182 @@ def assert_sql_denial(engine: Engine, query: str) -> None:
         raise AssertionError("Expected PostgreSQL insufficient privilege")
 
 
+@dataclass(frozen=True)
+class Issuance:
+    sessions: Sessions
+    verifier: CredentialVerifier
+    owner: Engine
+
+    def proof(
+        self,
+        subject: VerifiedSubject,
+        *,
+        mfa_level: MfaLevel = MfaLevel.PRIMARY,
+        organization_id: UUID | None = None,
+    ) -> CredentialProof:
+        with self.owner.connect() as connection:
+            version = connection.execute(
+                text("SELECT credential_version FROM users WHERE id = :id"),
+                {"id": subject.user_id},
+            ).scalar_one()
+        return self.verifier.confirm(
+            subject.user_id,
+            version,
+            mfa_level=mfa_level,
+            organization_id=organization_id,
+        )
+
+    def issue(
+        self,
+        subject: VerifiedSubject,
+        *,
+        mfa_level: MfaLevel,
+        organization_id: UUID | None = None,
+    ) -> SessionToken:
+        return self.sessions.issue(
+            self.proof(subject, mfa_level=mfa_level, organization_id=organization_id)
+        )
+
+
+def auth_checks(
+    issuance: "Issuance", api: Engine, worker: Engine, issuer: Engine
+) -> None:
+    sessions = issuance.sessions
+    for engine in (api, worker, issuer):
+        assert_sql_denial(
+            engine,
+            "SELECT public.veriq_auth_confirm(NULL, NULL, NULL, NULL, NULL, NULL)",
+        )
+        assert_sql_denial(engine, "SELECT proof_hash FROM auth_credential_proofs")
+    for engine in (api, worker, issuance.verifier.engine):
+        assert_sql_denial(
+            engine,
+            "SELECT public.veriq_auth_issue(NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)",
+        )
+    assert_sql_denial(
+        issuer, "SELECT public.veriq_session_issue(NULL, NULL, NULL, NULL, NULL, NULL)"
+    )
+    assert_sql_denial(api, "SELECT public.veriq_session_revoke(NULL, NULL, NULL, true)")
+    for engine in (api, worker, issuer):
+        assert_sql_denial(engine, "UPDATE auth_audit_events SET result = 'failed'")
+        assert_sql_denial(engine, "DELETE FROM auth_audit_events")
+        assert_sql_denial(engine, "DELETE FROM notification_outbox")
+
+    proof = issuance.proof(MULTI)
+    denied(lambda: sessions.issue(CredentialProof(proof.id, b"wrong")))
+    assert proof.secret.hex() not in repr(proof)
+    token = sessions.issue(proof)
+    denied(lambda: sessions.issue(proof))
+    expired = issuance.proof(MULTI)
+    with issuance.owner.begin() as connection:
+        connection.execute(
+            text("UPDATE auth_credential_proofs SET expires_at = now() WHERE id = :id"),
+            {"id": expired.id},
+        )
+    denied(lambda: sessions.issue(expired))
+
+    stale = issuance.proof(MULTI)
+    pending = issuance.proof(MULTI)
+    barrier = Barrier(2)
+
+    def redeem() -> SessionToken | None:
+        barrier.wait(timeout=10)
+        try:
+            return sessions.issue(pending)
+        except AccessDenied:
+            return None
+
+    def revoke_all() -> int:
+        barrier.wait(timeout=10)
+        return sessions.revoke(token, all_for_account=True)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        redeeming = executor.submit(redeem)
+        revoking = executor.submit(revoke_all)
+        replacement = redeeming.result(timeout=15)
+        assert revoking.result(timeout=15) == (1 if replacement is None else 2)
+    if replacement is not None:
+        denied(lambda: sessions.resolve(replacement))
+    denied(lambda: sessions.issue(pending))
+    denied(lambda: sessions.issue(stale))
+    denied(
+        lambda: issuance.verifier.confirm(
+            MULTI.user_id, 1, mfa_level=0, organization_id=None
+        )
+    )
+    fresh = sessions.issue(issuance.proof(MULTI))
+    assert sessions.resolve(fresh).user_id == MULTI.user_id
+    assert sessions.revoke(fresh) == 1
+
+    context = RequestContext.new()
+    event_id = uuid4()
+
+    def record_attempt() -> bool:
+        with api.begin() as connection:
+            return append_attempt(
+                connection, event_id, context, AuthEvent.LOGIN, AuthResult.DENIED
+            )
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        assert all(executor.map(lambda _: record_attempt(), range(8)))
+    with api.begin() as connection:
+        assert not append_attempt(
+            connection,
+            uuid4(),
+            context,
+            AuthEvent.SESSIONS_REVOKED,
+            AuthResult.SUCCEEDED,
+        )
+        assert not append_attempt(
+            connection, event_id, context, AuthEvent.LOGIN, AuthResult.FAILED
+        )
+
+    def claim() -> Notice | None:
+        with worker.begin() as connection:
+            return claim_notice(connection)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        claims = list(executor.map(lambda _: claim(), range(4)))
+    claimed = [notice for notice in claims if notice is not None]
+    assert len(claimed) == 1
+    first = claimed[0]
+    with issuance.owner.begin() as connection:
+        assert (
+            connection.execute(
+                text("SELECT count(*) FROM auth_audit_events WHERE id = :id"),
+                {"id": event_id},
+            ).scalar_one()
+            == 1
+        )
+        connection.execute(
+            text(
+                "UPDATE notification_outbox SET lease_until = now() WHERE event_id = :id"
+            ),
+            {"id": first.event_id},
+        )
+    second = claim()
+    assert second is not None and second.event_id == first.event_id
+    assert second.claim_id != first.claim_id
+    with worker.begin() as connection:
+        assert not acknowledge_notice(connection, first)
+        assert acknowledge_notice(connection, second)
+        assert acknowledge_notice(connection, second)
+    assert claim() is None
+    print(
+        "Auth PostgreSQL: isolated proof issuer, replay/expiry, concurrent revoke, audit and outbox passed."
+    )
+
+
 def main() -> None:
     url = database_url()
     assert url.database is not None and url.database.startswith("memberships_test_")
     owner = create_database_engine()
     issuer = create_database_engine()
+    verifier = create_database_engine()
+
+    @event.listens_for(verifier, "begin")
+    def assume_fixture_verifier(connection: Connection) -> None:
+        connection.exec_driver_sql("SET LOCAL ROLE veriq_credential_verifier")
 
     @event.listens_for(issuer, "begin")
     def assume_fixture_issuer(connection: Connection) -> None:
@@ -309,6 +495,8 @@ def main() -> None:
     try:
         seed(owner)
         sessions = Sessions(api, SessionPolicy(), issuer=issuer)
+        issuance = Issuance(sessions, CredentialVerifier(verifier), owner)
+        auth_checks(issuance, api, worker, issuer)
         assert_sql_denial(api, "SELECT token_hash FROM auth_sessions")
         assert_sql_denial(
             api, "SELECT public.veriq_session_issue(NULL, NULL, NULL, NULL, NULL, NULL)"
@@ -317,16 +505,17 @@ def main() -> None:
         assert_sql_denial(
             worker, "SELECT public.veriq_session_revoke(NULL, NULL, NULL, false)"
         )
-        lifecycle_checks(owner, sessions)
-        expiry_checks(owner, sessions, api)
-        tenant_checks(owner, sessions)
-        concurrency_checks(owner, sessions)
+        lifecycle_checks(owner, issuance)
+        expiry_checks(owner, issuance, api)
+        tenant_checks(owner, issuance)
+        concurrency_checks(owner, issuance)
         print(
             "Sessions smoke: hashing, expiry, revoke, rotation, organization MFA, RLS and concurrency passed."
         )
     finally:
         worker.dispose()
         api.dispose()
+        verifier.dispose()
         issuer.dispose()
         owner.dispose()
 

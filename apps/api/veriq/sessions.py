@@ -13,6 +13,8 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import Connection, Engine, text
 
+from veriq.auth_audit import RequestContext
+from veriq.auth_credentials import CredentialProof
 from veriq.permissions import SessionGate
 from veriq.tenant_access import (
     AccessDenied,
@@ -116,30 +118,30 @@ class Sessions:
                 yield connection
 
     def issue(
-        self,
-        subject: VerifiedSubject,
-        *,
-        mfa_level: MfaLevel,
-        organization_id: UUID | None = None,
+        self, proof: CredentialProof, *, context: RequestContext | None = None
     ) -> SessionToken:
-        """The caller supplies a subject and MFA level established by authentication."""
+        """Redeem a short-lived proof produced by the trusted verifier."""
         if self.issuer is None:
             raise AccessDenied
         token = SessionToken.generate()
         gate = token._gate(self.policy)
+        context = context or RequestContext.new()
         with self._transaction(self.issuer) as connection:
             accepted = connection.execute(
                 text("""
-                    SELECT public.veriq_session_issue(
-                        :id, :user, :digest, :org, CAST(:mfa AS smallint), CAST(:limits AS interval[])
+                    SELECT public.veriq_auth_issue(
+                        :proof, :proof_hash, :id, :digest, CAST(:limits AS interval[]),
+                        :event, :request, :correlation
                     )
                 """),
                 {
                     "id": gate.session_id,
-                    "user": subject.user_id,
+                    "proof": proof.id,
+                    "proof_hash": proof.digest,
+                    "event": uuid4(),
+                    "request": context.request_id,
+                    "correlation": context.correlation_id,
                     "digest": gate.digest,
-                    "org": organization_id,
-                    "mfa": int(mfa_level),
                     "limits": list(gate.limits),
                 },
             ).scalar_one()
@@ -164,18 +166,30 @@ class Sessions:
             )
         return replacement
 
-    def revoke(self, token: SessionToken, *, all_for_account: bool = False) -> int:
+    def revoke(
+        self,
+        token: SessionToken,
+        *,
+        all_for_account: bool = False,
+        context: RequestContext | None = None,
+    ) -> int:
         gate = token._gate(self.policy)
+        context = context or RequestContext.new()
         with self._transaction() as connection:
             count: int = connection.execute(
                 text("""
-                    SELECT public.veriq_session_revoke(:id, :digest, CAST(:limits AS interval[]), :all)
+                    SELECT public.veriq_auth_revoke(
+                        :id, :digest, CAST(:limits AS interval[]), :all, :event, :request, :correlation
+                    )
                 """),
                 {
                     "id": gate.session_id,
                     "digest": gate.digest,
                     "limits": list(gate.limits),
                     "all": all_for_account,
+                    "event": uuid4(),
+                    "request": context.request_id,
+                    "correlation": context.correlation_id,
                 },
             ).scalar_one()
         return count
