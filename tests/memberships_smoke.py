@@ -10,7 +10,9 @@ CHECKS = Path(__file__).with_name("membership_checks.py")
 
 
 def compose(*args: str, stdin: str | None = None) -> None:
-    subprocess.run([*COMPOSE, *args], input=stdin, text=True, check=True, timeout=120)
+    subprocess.run(
+        [*COMPOSE, *args], input=stdin, encoding="utf-8", check=True, timeout=120
+    )
 
 
 def database(sql: str) -> None:
@@ -69,16 +71,19 @@ def main() -> None:
         scratch(database_name, "alembic", "current", "--check-heads")
         scratch(database_name, "alembic", "downgrade", "0002")
         scratch(database_name, "python", "-", "seed", stdin=checks)
+        scratch(database_name, "alembic", "upgrade", "0003")
+        scratch(database_name, "python", "-", "upgrade", stdin=checks)
+        scratch(database_name, "alembic", "upgrade", "0004")
+        scratch(database_name, "python", "-", "legacy-grants", stdin=checks)
         scratch(database_name, "alembic", "upgrade", "head")
         scratch(database_name, "alembic", "current", "--check-heads")
-        scratch(database_name, "python", "-", "upgrade", stdin=checks)
         compose("restart", "postgres")
         compose("up", "--wait", "--wait-timeout", "90")
-        scratch(database_name, "python", "-", "persist", stdin=checks)
+        scratch(database_name, "python", "-", "roles", stdin=checks)
     finally:
         database(f"DROP DATABASE {database_name}")
     print(
-        "Membership smoke: fresh install, upgrade, constraints, status and PostgreSQL restart passed."
+        "Identity smoke: fresh install, upgrades through 0005, grant revocation and PostgreSQL restart passed."
     )
 
 
