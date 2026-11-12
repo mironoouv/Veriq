@@ -13,6 +13,21 @@
 `mfa_factors(id,user_id,kind,encrypted_secret,created_at,last_used_at)`; `recovery_codes(id,user_id,code_hash,used_at)`
 `organizations(id,slug unique,display_name,timezone,retention_policy_id,status)`
 `organization_memberships(id,organization_id,user_id,status,joined_at,unique(org,user))`
+
+Ревизия `0003` (Foundation 1c Slice A) добавляет эту таблицу, сохраняя данные
+`organizations`, `users` и `background_jobs`. Пара `(organization_id, user_id)`
+уникальна во всех состояниях, а ключ `(organization_id, id)` предусмотрен для
+будущих составных FK. Ссылки на организацию и аккаунт обязательны, удаление
+ссылаемых строк ограничено `RESTRICT`. Индекс `user_id` поддерживает поиск
+членств по глобальному аккаунту.
+
+Статусы — `pending` по умолчанию, `active`, `suspended`, `revoked`.
+SQLAlchemy-модель отличает активное членство, ведёт версию при ORM-обновлении
+и хранит временные метки с часовым поясом. `joined_at` опционален до оформления
+операции вступления. При появлении авторизации статус проверяется на момент
+доступа. Аудит изменений и сохранение исторических ссылок обязательны для
+будущих операций. Срез A добавляет схему и модель без маршрутов членства.
+
 `roles(id,organization_id nullable,code)`; `permissions(id,code)`; `role_permissions(role_id,permission_id)`; `membership_roles(membership_id,role_id)`
 `invites(id,organization_id,token_hash,scope,expires_at,uses_left,invited_email_hash,created_by)`
 `join_requests(id,organization_id,user_id,status,reviewed_by,...)`

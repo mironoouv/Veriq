@@ -32,7 +32,7 @@ jobs:
           docker compose run --no-deps --rm web npm run build
       - name: Verify migration and same-origin connectivity
         run: |
-          docker compose exec -T api alembic current --check-heads
+          docker compose run --no-deps --rm -T migrate alembic current --check-heads
           docker compose exec -T postgres psql -U veriq_dev -d veriq -v ON_ERROR_STOP=1 -c 'SELECT id FROM organizations LIMIT 0; SELECT id FROM users LIMIT 0;'
           python3 tests/smoke.py
       - name: Verify PostgreSQL persistence
@@ -48,8 +48,10 @@ jobs:
           docker compose up --wait --wait-timeout 90
           test "$(database -Atc 'SELECT marker FROM foundation_persistence_probe;')" = 1
           database -c 'DROP TABLE foundation_persistence_probe;'
-          docker compose exec -T api alembic current --check-heads
+          docker compose run --no-deps --rm -T migrate alembic current --check-heads
           python3 tests/smoke.py
+      - name: Verify membership migration and constraints
+        run: python3 tests/memberships_smoke.py
       - name: Verify background worker and Redis recovery
         run: python3 tests/worker_smoke.py
       - name: Stop stack
