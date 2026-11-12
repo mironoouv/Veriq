@@ -1,6 +1,7 @@
+import asyncio
 import os
 
-from redis import Redis
+from redis.asyncio import Redis
 from redis.backoff import NoBackoff
 from redis.retry import Retry
 
@@ -12,3 +13,8 @@ def create_redis() -> Redis:
         socket_timeout=2,
         retry=Retry(NoBackoff(), 0),
     )
+
+
+async def ping_redis(redis: Redis) -> None:
+    async with asyncio.timeout(2):
+        await redis.ping()

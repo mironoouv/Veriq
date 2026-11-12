@@ -1,3 +1,4 @@
+import asyncio
 import os
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -12,7 +13,7 @@ from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from veriq.database import create_database_engine
-from veriq.redis_client import create_redis
+from veriq.redis_client import create_redis, ping_redis
 
 
 class Health(BaseModel):
@@ -48,7 +49,11 @@ def create_app(
         finally:
             database.dispose()
             if cache is not None:
-                cache.close()
+                await cache.aclose()
+
+    def check_database() -> None:
+        with database.connect() as connection:
+            connection.execute(text("SELECT 1"))
 
     prefix = "/api/v1"
     app = FastAPI(
@@ -72,16 +77,15 @@ def create_app(
             503: {"model": HealthFailure, "description": "Dependency unavailable"}
         },
     )
-    def readiness(response: Response) -> Health | JSONResponse:
+    async def readiness(response: Response) -> Health | JSONResponse:
         response.headers["Cache-Control"] = "no-store"
         try:
-            with database.connect() as connection:
-                connection.execute(text("SELECT 1"))
+            await asyncio.to_thread(check_database)
             if cache is not None:
-                cache.ping()
+                await ping_redis(cache)
             elif check_redis is not None:
                 check_redis()
-        except (SQLAlchemyError, RedisError):
+        except (SQLAlchemyError, RedisError, TimeoutError):
             failure = HealthFailure(error=HealthError(request_id=str(uuid4())))
             return JSONResponse(
                 status_code=503,

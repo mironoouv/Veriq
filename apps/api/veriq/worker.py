@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import logging
 import signal
 from pathlib import Path
@@ -18,7 +19,7 @@ HEARTBEAT = Path("/tmp/veriq-worker-heartbeat")
 LOG = logging.getLogger(__name__)
 
 
-def main() -> int:
+async def main() -> int:
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("run")
@@ -37,7 +38,7 @@ def main() -> int:
     redis = create_redis()
     try:
         if args.command == "enqueue-probe":
-            enqueue_probe(engine, redis, args.id)
+            await enqueue_probe(engine, redis, args.id)
             return 0
 
         stopped = Event()
@@ -58,15 +59,16 @@ def main() -> int:
                 continue
             if not processed:
                 try:
-                    redis.blpop([WAKE_QUEUE], timeout=1)
-                except RedisError:
+                    async with asyncio.timeout(2):
+                        await redis.execute_command("BLPOP", WAKE_QUEUE, 1)
+                except (RedisError, TimeoutError):
                     stopped.wait(1)
         HEARTBEAT.unlink(missing_ok=True)
         return 0
     finally:
-        redis.close()
+        await redis.aclose()
         engine.dispose()
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(asyncio.run(main()))

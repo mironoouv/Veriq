@@ -1,8 +1,9 @@
+import asyncio
 import logging
 from collections.abc import Callable
 from uuid import UUID
 
-from redis import Redis
+from redis.asyncio import Redis
 from redis.exceptions import RedisError
 from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -12,7 +13,7 @@ WAKE_QUEUE = "veriq:background:wake"
 MAX_ATTEMPTS = 3
 
 
-def enqueue_probe(engine: Engine, redis: Redis, job_id: UUID) -> None:
+async def enqueue_probe(engine: Engine, redis: Redis, job_id: UUID) -> None:
     with engine.begin() as connection:
         connection.execute(
             text("""
@@ -22,11 +23,11 @@ def enqueue_probe(engine: Engine, redis: Redis, job_id: UUID) -> None:
             {"id": job_id},
         )
     try:
-        with redis.pipeline() as pipe:
+        async with asyncio.timeout(2), redis.pipeline() as pipe:
             pipe.lpush(WAKE_QUEUE, "wake")
             pipe.ltrim(WAKE_QUEUE, 0, 127)
-            pipe.execute()
-    except RedisError:
+            await pipe.execute()
+    except (RedisError, TimeoutError):
         LOG.warning(
             "Background wake-up unavailable; PostgreSQL polling will deliver the job"
         )
