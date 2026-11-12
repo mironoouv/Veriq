@@ -20,6 +20,7 @@ from veriq.tenant_access import AccessDenied
 class Purpose(StrEnum):
     SENSITIVE = "sensitive"
     FACTOR_DISABLE = "factor_disable"
+    PASSWORD_CHANGE = "password_change"
 
 
 @dataclass(frozen=True)

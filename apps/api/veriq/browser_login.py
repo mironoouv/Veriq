@@ -3,14 +3,12 @@
 import asyncio
 import hmac
 import os
-import re
 import secrets
 import unicodedata
 from dataclasses import dataclass, field, replace
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
-from argon2 import Type, extract_parameters
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 from cryptography.exceptions import InvalidTag
 from fastapi import APIRouter, Request
@@ -18,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from redis.asyncio import Redis
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
-from starlette.responses import JSONResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, Response
 
 from veriq.auth_audit import AuthEvent, AuthResult, RequestContext, append_attempt
 from veriq.auth_credentials import CredentialVerifier
@@ -30,9 +28,10 @@ from veriq.auth_rate_limit import (
     trusted_client_ip,
 )
 from veriq.mfa import Mfa, Purpose
+from veriq.password_recovery import PasswordRecovery
 from veriq.password_work import PasswordCapacityExceeded, PasswordWork
-from veriq.registration import Signup, _body_schema, _error, _payload
-from veriq.registration_policy import HASHER, canonical_email
+from veriq.registration import Address, Signup, Verify, _body_schema, _error, _payload
+from veriq.registration_policy import HASHER, canonical_email, supported_hash
 from veriq.sessions import MfaRequired, Sessions, SessionToken
 from veriq.tenant_access import AccessDenied
 
@@ -57,6 +56,12 @@ class StepUp(BaseModel):
     purpose: Purpose
 
 
+class ChangePassword(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    current_password: SecretStr
+    new_password: SecretStr
+
+
 class Rotation(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     organization_id: UUID | None = Field(strict=False)
@@ -68,29 +73,6 @@ class Candidate:
     version: int
     password_hash: str = field(repr=False)
     replacement: str | None = field(default=None, repr=False)
-
-
-_PHC = re.compile(
-    r"\$argon2id\$v=19\$m=\d{1,6},t=\d{1,2},p=\d{1,2}\$[A-Za-z0-9+/]+\$[A-Za-z0-9+/]+"
-)
-
-
-def supported_hash(value: str) -> bool:
-    if len(value) > 256 or _PHC.fullmatch(value) is None:
-        return False
-    try:
-        profile = extract_parameters(value)
-    except InvalidHashError:
-        return False
-    return (
-        profile.type is Type.ID
-        and 1 <= profile.parallelism <= 4
-        and 1 <= profile.time_cost <= 4
-        and 8 * profile.parallelism <= profile.memory_cost <= 65536
-        and profile.time_cost * profile.memory_cost <= 196608
-        and 8 <= profile.salt_len <= 32
-        and 16 <= profile.hash_len <= 64
-    )
 
 
 class PasswordLogin:
@@ -154,12 +136,56 @@ def _audit(engine: Engine, context: RequestContext, result: AuthResult) -> None:
         append_attempt(connection, uuid4(), context, AuthEvent.LOGIN, result)
 
 
+def password_reset_page() -> HTMLResponse:
+    nonce = secrets.token_urlsafe(24)
+    return HTMLResponse(
+        f"""<!doctype html><html lang="en"><meta charset="utf-8">
+        <title>Reset password</title>
+        <form><label>Email <input type="email" name="email" required></label>
+        <label>New password <input type="password" name="password" autocomplete="new-password" required></label>
+        <button type="submit">Reset password</button></form><output></output>
+        <script nonce="{nonce}">
+        let proof = location.hash.slice(1);
+        history.replaceState(null, "", location.pathname);
+        const form = document.querySelector("form");
+        const output = document.querySelector("output");
+        form.addEventListener("submit", async (event) => {{
+          event.preventDefault();
+          if (!form.reportValidity()) return;
+          try {{
+            const bootstrap = await fetch("/api/v1/auth/csrf", {{
+              headers: {{"X-Veriq-CSRF-Bootstrap": "1"}}
+            }});
+            if (!bootstrap.ok) throw new Error("CSRF unavailable");
+            const token = (await bootstrap.json()).csrf_token;
+            const values = Object.fromEntries(new FormData(form));
+            const result = await fetch(location.pathname, {{
+              method: "POST", headers: {{"Content-Type": "application/json", "X-CSRF-Token": token}},
+              body: JSON.stringify({{...values, proof}})
+            }});
+            output.textContent = result.ok ? "Password reset. Sign in again." : "Password reset failed.";
+            if (result.ok) {{ proof = ""; form.reset(); }}
+          }} catch {{ output.textContent = "Password reset unavailable."; }}
+        }});
+        </script></html>""",
+        headers={
+            **HEADERS,
+            "Content-Security-Policy": (
+                f"default-src 'none'; script-src 'nonce-{nonce}'; connect-src 'self'; "
+                "form-action 'none'; base-uri 'none'; frame-ancestors 'none'"
+            ),
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 def browser_router(
     engine: Engine,
     redis: Redis,
     verifier: Engine,
     issuer: Engine,
     mfa: Mfa | None = None,
+    recovery: PasswordRecovery | None = None,
 ) -> APIRouter:
     origin = os.environ["VERIQ_TEST_LOGIN_ORIGIN"]
     parsed = urlsplit(origin)
@@ -179,7 +205,13 @@ def browser_router(
         limit_key,
         {
             category: LimitBudget(30, 5, 180)
-            if category is AuthCategory.MFA
+            if category
+            in {
+                AuthCategory.MFA,
+                AuthCategory.PASSWORD_RESET,
+                AuthCategory.PASSWORD_RESET_CONFIRM,
+                AuthCategory.PASSWORD_CHANGE,
+            }
             else LimitBudget(40, 10, 300)
             for category in AuthCategory
         },
@@ -509,4 +541,129 @@ def browser_router(
 
     if mfa is not None:
         enable_mfa(mfa)
+
+    def enable_recovery(service: PasswordRecovery) -> None:
+        password_work = PasswordWork[None]()
+
+        async def recovery_rate(
+            request: Request, category: AuthCategory, identifier: str
+        ) -> None:
+            if request.client is None:
+                raise AccessDenied
+            await limiter.check(
+                category, trusted_client_ip(request.client.host, None, ()), identifier
+            )
+
+        def rate_error(error: AuthLimitRejected, context: RequestContext) -> Response:
+            response = error.response(context)
+            response.headers.update(HEADERS)
+            return response
+
+        @router.post(
+            "/auth/password/change",
+            status_code=204,
+            openapi_extra=_body_schema(ChangePassword),
+        )
+        async def change_password(request: Request) -> Response:
+            context = RequestContext.new()
+            if not csrf_valid(request):
+                return _error(context, "CSRF_DENIED", 403)
+            try:
+                data = ChangePassword.model_validate(await _payload(request))
+            except (ValueError, RecursionError):
+                return _error(context, "INVALID_REQUEST", 400)
+            token = SessionToken(request.cookies.get(SESSION, ""))
+            try:
+                identity = await asyncio.to_thread(sessions.resolve, token)
+                await recovery_rate(
+                    request, AuthCategory.PASSWORD_CHANGE, str(identity.user_id)
+                )
+                await password_work.run(
+                    lambda: service.change(
+                        token,
+                        data.current_password.get_secret_value(),
+                        data.new_password.get_secret_value(),
+                        context,
+                    )
+                )
+            except AuthLimitRejected as error:
+                return rate_error(error, context)
+            except AccessDenied:
+                return _error(context, "PASSWORD_CHANGE_DENIED", 401)
+            except ValueError:
+                return _error(context, "PASSWORD_REJECTED", 400)
+            except (SQLAlchemyError, PasswordCapacityExceeded):
+                return _error(context, "SERVICE_UNAVAILABLE", 503)
+            response = Response(status_code=204, headers=HEADERS)
+            _clear(response)
+            return response
+
+        @router.post(
+            "/auth/password-reset/request",
+            status_code=202,
+            openapi_extra=_body_schema(Address),
+        )
+        async def request_password_reset(request: Request) -> Response:
+            context = RequestContext.new()
+            if not csrf_valid(request):
+                return _error(context, "CSRF_DENIED", 403)
+            try:
+                data = Address.model_validate(await _payload(request))
+                email = canonical_email(data.email)
+            except (ValueError, RecursionError):
+                return _error(context, "INVALID_REQUEST", 400)
+            try:
+                await recovery_rate(request, AuthCategory.PASSWORD_RESET, email)
+                await asyncio.to_thread(service.request, email, context)
+            except AuthLimitRejected as error:
+                return rate_error(error, context)
+            except (AccessDenied, SQLAlchemyError):
+                return _error(context, "SERVICE_UNAVAILABLE", 503)
+            return Response(status_code=202, headers=HEADERS)
+
+        @router.post(
+            "/auth/password-reset/confirm",
+            status_code=204,
+            openapi_extra=_body_schema(Verify),
+        )
+        async def confirm_password_reset(request: Request) -> Response:
+            context = RequestContext.new()
+            if not csrf_valid(request):
+                return _error(context, "CSRF_DENIED", 403)
+            try:
+                data = Verify.model_validate(await _payload(request))
+                email = canonical_email(data.email)
+            except (ValueError, RecursionError):
+                return _error(context, "INVALID_REQUEST", 400)
+            try:
+                await recovery_rate(request, AuthCategory.PASSWORD_RESET_CONFIRM, email)
+                await password_work.run(
+                    lambda: service.confirm(
+                        SessionToken(data.proof.get_secret_value()),
+                        email,
+                        data.password.get_secret_value(),
+                        context,
+                    )
+                )
+            except AuthLimitRejected as error:
+                return rate_error(error, context)
+            except AccessDenied:
+                return _error(context, "INVALID_PROOF", 400)
+            except ValueError:
+                return _error(context, "PASSWORD_REJECTED", 400)
+            except (SQLAlchemyError, PasswordCapacityExceeded):
+                return _error(context, "SERVICE_UNAVAILABLE", 503)
+            response = Response(status_code=204, headers=HEADERS)
+            _clear(response)
+            return response
+
+        @router.get("/auth/password-reset/confirm", include_in_schema=False)
+        async def reset_page(request: Request) -> Response:
+            if not same_origin(request):
+                return _error(RequestContext.new(), "CSRF_DENIED", 403)
+            return password_reset_page()
+
+    if recovery is not None:
+        enable_recovery(recovery)
+
     return router

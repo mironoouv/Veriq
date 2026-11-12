@@ -4,9 +4,8 @@ from threading import Event
 import pytest
 from argon2 import PasswordHasher
 
-from veriq.browser_login import supported_hash
 from veriq.password_work import PasswordCapacityExceeded, PasswordWork
-from veriq.registration_policy import HASHER
+from veriq.registration_policy import HASHER, supported_hash
 
 
 def test_supported_argon2id_bounds() -> None:

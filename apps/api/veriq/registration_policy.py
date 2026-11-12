@@ -5,13 +5,37 @@ import unicodedata
 from hashlib import sha256
 from pathlib import Path
 
-from argon2 import PasswordHasher
+from argon2 import PasswordHasher, Type, extract_parameters
+from argon2.exceptions import InvalidHashError
 from argon2.profiles import RFC_9106_LOW_MEMORY
 
 _LOCAL = re.compile(r"[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*")
 _LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 HASHER = PasswordHasher.from_parameters(RFC_9106_LOW_MEMORY)
+
+
+_PHC = re.compile(
+    r"\$argon2id\$v=19\$m=\d{1,6},t=\d{1,2},p=\d{1,2}\$[A-Za-z0-9+/]+\$[A-Za-z0-9+/]+"
+)
+
+
+def supported_hash(value: str) -> bool:
+    if len(value) > 256 or _PHC.fullmatch(value) is None:
+        return False
+    try:
+        profile = extract_parameters(value)
+    except InvalidHashError:
+        return False
+    return (
+        profile.type is Type.ID
+        and 1 <= profile.parallelism <= 4
+        and 1 <= profile.time_cost <= 4
+        and 8 * profile.parallelism <= profile.memory_cost <= 65536
+        and profile.time_cost * profile.memory_cost <= 196608
+        and 8 <= profile.salt_len <= 32
+        and 16 <= profile.hash_len <= 64
+    )
 
 
 def canonical_email(value: str) -> str:
