@@ -108,3 +108,6 @@ jobs:
       - name: Stop production stack
         if: always()
         run: docker compose down
+
+      - name: Exercise Auth journeys on isolated HTTPS Chromium
+        run: node tests/auth-browser-security.mjs

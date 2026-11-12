@@ -82,3 +82,19 @@ RU/EN, прямой маршрут и fallback, живость Nginx при ос
 ## Auth Slice 6 smoke
 
 Проверки PostgreSQL используют ограниченные роли и проверяют независимость сотрудников, совпадение доверенного источника, чужую организацию, оспаривание, отзыв членства во время выпуска, конкурентный выпуск, истечение и повтор capability, сохранение hold после password reset, отсутствие сессии после enrollment и обязательное ожидание доставки уведомления. Отдельный локальный Chromium проверяет одинаковые ответы запроса, CSRF и отказ поддельного разрешения. Production Playwright проверяет отключённый по умолчанию Auth.
+
+## Auth Slice 9 browser security validation
+
+Команда из корня репозитория после установки зафиксированных web-зависимостей
+и Chromium: `node tests/auth-browser-security.mjs`. Требуются Docker Compose и
+OpenSSL. На Windows при необходимости задайте `VERIQ_E2E_OPENSSL` как путь к
+исполняемому файлу. Скрипт создаёт временный сертификат, одноразовые ключи,
+локальный mailbox и PostgreSQL на tmpfs в выделенном Compose-проекте. Доступен
+только loopback HTTPS. Браузер использует самоподписанный сертификат стенда.
+Команда не удаляет существующие volumes.
+
+Windows и GitHub Actions выполняют один сценарий. Production Playwright
+отдельно проверяет отсутствие тестовых Auth endpoints. Миграции с существующими
+данными, рестарт PostgreSQL, TEN-01 и конкурентные сценарии остаются в
+`memberships_smoke.py`. Матрица и замеры приведены в
+[Security Validation Report](AUTH_SECURITY_VALIDATION.md).
