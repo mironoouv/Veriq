@@ -37,15 +37,22 @@ services:
 
   migrate:
     <<: *api
-    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *database-env
+      VERIQ_API_DB_PASSWORD: ${VERIQ_API_DB_PASSWORD:?Generate a separate API database password}
+      VERIQ_WORKER_DB_PASSWORD: ${VERIQ_WORKER_DB_PASSWORD:?Generate a separate worker database password}
+    command: ["python", "-m", "veriq.migrate"]
     depends_on:
       postgres:
         condition: service_healthy
 
   api:
     <<: *api
-    environment: &worker-env
-      <<: *database-env
+    environment: &runtime-env
+      VERIQ_DB_NAME: veriq
+      VERIQ_DB_HOST: postgres
+      VERIQ_DB_USER: veriq_api
+      VERIQ_DB_PASSWORD: ${VERIQ_API_DB_PASSWORD:?Generate a separate API database password}
       VERIQ_REDIS_URL: ${VERIQ_REDIS_URL:-redis://redis:6379/0}
     networks: [database, queue, app]
     depends_on:
@@ -61,7 +68,10 @@ services:
 
   worker:
     <<: *api
-    environment: *worker-env
+    environment:
+      <<: *runtime-env
+      VERIQ_DB_USER: veriq_worker
+      VERIQ_DB_PASSWORD: ${VERIQ_WORKER_DB_PASSWORD:?Generate a separate worker database password}
     command: ["python", "-m", "veriq.worker", "run"]
     stop_grace_period: 30s
     networks: [database, queue]

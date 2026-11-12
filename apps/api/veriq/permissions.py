@@ -12,8 +12,6 @@ def organization_permission_codes(
         text("""
             SELECT DISTINCT grants.permission_code
             FROM organization_memberships AS membership
-            JOIN organizations AS org ON org.id = membership.organization_id
-            JOIN users AS account ON account.id = membership.user_id
             JOIN membership_roles AS assignment
               ON assignment.organization_id = membership.organization_id
              AND assignment.membership_id = membership.id
@@ -24,10 +22,13 @@ def organization_permission_codes(
             WHERE membership.organization_id = :organization_id
               AND membership.user_id = :user_id
               AND membership.status = 'active'
-              AND org.status = 'active'
-              AND account.disabled_at IS NULL
+              AND public.veriq_active_membership(:organization_id, :subject)
         """),
-        {"organization_id": organization_id, "user_id": user_id},
+        {
+            "organization_id": organization_id,
+            "user_id": user_id,
+            "subject": str(user_id),
+        },
     )
     return frozenset(result.scalars())
 

@@ -22,12 +22,19 @@ if (-not (Test-Path -LiteralPath $credentialFile)) {
     Set-Content -LiteralPath $credentialFile -Value $password -Encoding ascii
 }
 $env:VERIQ_DB_PASSWORD = (Get-Content -LiteralPath $credentialFile -Raw).Trim()
+foreach ($name in 'VERIQ_API_DB_PASSWORD', 'VERIQ_WORKER_DB_PASSWORD') {
+    $password = python -c 'import secrets; print(secrets.token_hex(32))'
+    if ($LASTEXITCODE -or -not $password) { throw 'Runtime password generation failed' }
+    Set-Item "Env:$name" $password
+}
 if (Compose ps -aq) { throw 'The dedicated smoke project already has containers.' }
 Compose config --quiet
 try {
     Compose up --build --wait --wait-timeout 120
     Compose ps -a
-    Compose exec -T api alembic current --check-heads
+    Compose run --no-deps --rm -T migrate alembic current --check-heads
+    python tests/memberships_smoke.py
+    if ($LASTEXITCODE) { throw 'Identity and tenant smoke failed' }
     python tests/smoke.py
     if ($LASTEXITCODE) { throw 'API smoke failed' }
     python tests/worker_smoke.py

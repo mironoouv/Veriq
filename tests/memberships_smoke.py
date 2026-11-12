@@ -1,4 +1,4 @@
-"""Verify Slice A against PostgreSQL in an isolated Compose project."""
+"""Verify identity migrations and TEN-01 in an isolated Compose project."""
 
 import os
 import subprocess
@@ -7,6 +7,15 @@ from uuid import uuid4
 
 COMPOSE = ["docker", "compose", "-f", "compose.yaml", "-f", "compose.dev.yaml"]
 CHECKS = Path(__file__).with_name("membership_checks.py")
+TENANT_CHECKS = Path(__file__).with_name("tenant_checks.py")
+CHECK_SERVICE_ROLE = """
+import sys
+from sqlalchemy import text
+from veriq.database import create_database_engine
+
+with create_database_engine().connect() as connection:
+    assert connection.execute(text("SELECT current_user")).scalar_one() == sys.argv[1]
+"""
 
 
 def compose(*args: str, stdin: str | None = None) -> None:
@@ -54,6 +63,8 @@ def main() -> None:
         raise SystemExit("Use the dedicated local or CI Compose project")
     database_name = f"memberships_test_{uuid4().hex}"
     checks = CHECKS.read_text(encoding="utf-8")
+    for service, role in (("api", "veriq_api"), ("worker", "veriq_worker")):
+        compose("exec", "-T", service, "python", "-c", CHECK_SERVICE_ROLE, role)
     # The running Compose stack has already migrated a fresh database in CI.
     compose(
         "run",
@@ -75,15 +86,22 @@ def main() -> None:
         scratch(database_name, "python", "-", "upgrade", stdin=checks)
         scratch(database_name, "alembic", "upgrade", "0004")
         scratch(database_name, "python", "-", "legacy-grants", stdin=checks)
+        scratch(database_name, "alembic", "upgrade", "0005")
         scratch(database_name, "alembic", "upgrade", "head")
         scratch(database_name, "alembic", "current", "--check-heads")
         compose("restart", "postgres")
         compose("up", "--wait", "--wait-timeout", "90")
         scratch(database_name, "python", "-", "roles", stdin=checks)
+        scratch(
+            database_name,
+            "python",
+            "-",
+            stdin=TENANT_CHECKS.read_text(encoding="utf-8"),
+        )
     finally:
         database(f"DROP DATABASE {database_name}")
     print(
-        "Identity smoke: fresh install, upgrades through 0005, grant revocation and PostgreSQL restart passed."
+        "Identity smoke: fresh install, 0005 -> 0006 with existing rows, runtime roles and TEN-01 passed."
     )
 
 

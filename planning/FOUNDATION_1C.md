@@ -1,6 +1,6 @@
 # Foundation 1c — Identity, Roles & Tenant Isolation
 
-**Статус: APPROVED с уточнениями владельца.** Slice A принят. Разрешён Slice B. Срезы C–D требуют отдельного разрешения. Основание — [ТЗ §1 и §2](../docs/VERIQ_SPEC.md), [DATABASE](../docs/DATABASE.md), [SECURITY](../docs/SECURITY.md), [ADR-003/014/015](../docs/project-memory/DECISIONS.md), [ROADMAP](ROADMAP.md) и [TEN-01](../docs/ACCEPTANCE.md).
+**Статус: APPROVED с уточнениями владельца.** Slice A и B приняты. Разрешён Slice C. Slice D требует отдельного разрешения. Основание — [ТЗ §1 и §2](../docs/VERIQ_SPEC.md), [DATABASE](../docs/DATABASE.md), [SECURITY](../docs/SECURITY.md), [ADR-003/014/015](../docs/project-memory/DECISIONS.md), [ROADMAP](ROADMAP.md) и [TEN-01](../docs/ACCEPTANCE.md).
 
 ## 1. Границы этапа
 

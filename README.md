@@ -68,14 +68,19 @@ Engine через `docker info`, наличие файла образа диск
 
 ```powershell
 if (-not (Test-Path .env)) {
-    $veriqDbPassword = python -c "import secrets; print(secrets.token_hex(32))"
-    if ($LASTEXITCODE -ne 0 -or -not $veriqDbPassword) { throw "Password generation failed" }
-    "VERIQ_DB_PASSWORD=$veriqDbPassword" | Set-Content -Encoding ascii .env
-    Remove-Variable veriqDbPassword
+    New-Item -ItemType File .env | Out-Null
+}
+foreach ($name in 'VERIQ_DB_PASSWORD', 'VERIQ_API_DB_PASSWORD', 'VERIQ_WORKER_DB_PASSWORD') {
+    if (-not (Select-String -Path .env -Pattern "^\s*$name\s*=" -Quiet)) {
+        $veriqDbPassword = python -c "import secrets; print(secrets.token_hex(32))"
+        if ($LASTEXITCODE -ne 0 -or -not $veriqDbPassword) { throw "Password generation failed" }
+        Add-Content -Encoding ascii .env "$name=$veriqDbPassword"
+        Remove-Variable veriqDbPassword
+    }
 }
 docker compose -f compose.yaml -f compose.dev.yaml up --build --wait
 docker compose -f compose.yaml -f compose.dev.yaml ps --all
-docker compose -f compose.yaml -f compose.dev.yaml exec -T api alembic current --check-heads
+docker compose -f compose.yaml -f compose.dev.yaml run --no-deps --rm -T migrate alembic current --check-heads
 python tests/smoke.py
 ```
 
@@ -84,7 +89,9 @@ PostgreSQL и Redis. В локальном режиме доступна [OpenAP
 Для нестандартного порта укажите `VERIQ_WEB_PORT` в `.env` и в окружении
 перед запуском `tests/smoke.py`.
 
-API стартует после выполнения `alembic upgrade head`. При ошибке миграции
+Для существующего тома сохраните `VERIQ_DB_PASSWORD`. Если значения уже присутствуют в
+`.env` и пусты, заполните их отдельными случайными паролями. API стартует после
+миграций и настройки отдельных учётных данных API и worker. При ошибке миграции
 посмотрите `docker compose -f compose.yaml -f compose.dev.yaml logs migrate postgres`,
 исправьте причину и повторите запуск. Для остановки используйте
 `docker compose -f compose.yaml -f compose.dev.yaml down`: именованный том PostgreSQL
@@ -106,9 +113,9 @@ npm --prefix apps/web run build
 ```
 
 Публикуется только веб-порт на loopback. Compose предназначен для разработки.
-Его роль PostgreSQL используется для локальной инициализации, миграций и проверки
-доступности. Конфигурация с отдельными ролями БД и production overlay запланированы
-в следующих срезах Foundation.
+Локальная административная роль PostgreSQL используется для инициализации и
+миграций. API и worker подключаются с отдельными ограниченными ролями.
+Production overlay запланирован для следующего этапа Foundation.
 
 ## Статус разработки
 

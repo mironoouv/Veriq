@@ -14,6 +14,28 @@
 - Slice B stores platform and organization grants separately. A Superadmin assignment alone yields no organization permissions. Internal grant readers check live membership state and expect an already verified subject. Resource authorization remains a separate check. Slice B exposes no public or user-context role writer. A future writer must reject self-elevation and verify the actor, target, scope, step-up and audit before exposure.
 - PostgreSQL advances the membership grant epoch when status becomes revoked. Assignment and revocation serialize on the membership row. Current reads require matching epochs, so reactivation requires explicit new assignments. Suspension keeps the epoch and allows restoration on activation. An authorization check must use a current database snapshot. Previous results, including those from an already open snapshot, must not be reused across requests.
 
+### Tenant transaction boundary (Slice C)
+
+The future authentication layer supplies a verified subject. A requested
+organization ID is a selector. The server checks the account, organization
+and membership before setting the user and organization with
+`set_config(..., true)` in the same transaction. Commit and rollback clear
+the local settings. Resource policies require a current tenant permission and
+can additionally require ownership of a resource loaded by a trusted repository.
+Platform grants are excluded from this path. Current database reads recheck
+membership status and assignment epoch.
+
+`public.veriq_active_membership(uuid, text)` returns only a boolean for an
+explicit account and organization. It is owned by `veriq_identity_lookup`,
+a NOLOGIN role with column-level reads and dedicated SELECT policies for the
+two scoped tables. It has no table ownership, write grants or BYPASSRLS.
+The function uses qualified table names, a fixed `pg_catalog, pg_temp`
+search path and no dynamic SQL. PUBLIC execution is revoked, and only API
+receives EXECUTE among runtime roles. An API database credential can query the
+boolean and set its own PostgreSQL settings. This boundary assumes trusted API
+SQL and server-verified subjects. It cannot defend against arbitrary SQL
+execution with that credential. Public session resolution is deferred.
+
 ## Agent security
 - Agent service has device identity; initial deployment token limited to org, TTL and quota, admin approval. Key generated per device; protect at rest (Windows machine key store/DPAPI) and pin server trust with ordinary certificate validation, no bypass TLS.
 - C# desktop in user session, service in Session 0, restricted named pipe ACL. Stop capture on logout/end. No keylogging, covert capture, arbitrary remote code execution, personal file scraping.
