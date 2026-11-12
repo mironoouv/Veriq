@@ -28,6 +28,9 @@ coverage/
 .env
 .env.*
 !.env.example
+!/.env.prod.example
+playwright-report/
+test-results/
 *.pem
 *.key
 *.pfx

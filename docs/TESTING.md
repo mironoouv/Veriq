@@ -28,3 +28,26 @@
 
 ## Release gates
 A. no hard-coded secrets or debug bypass. B. Two tenant isolation proven. C. no untrusted code on API host. D. no media recording. E. one active writer per attempt. F. 2FA enforced by role. G. recover test passed. H. windows agent signed packages and clean uninstall. I. security/legal student disclosure reviewed. J. user flows E2E test reproducible in CI.
+
+## Foundation 1d browser smoke
+
+Playwright закреплён в `apps/web/package-lock.json`. На Windows с Docker
+Desktop из корня проекта установите зависимости и браузер:
+
+```powershell
+npm.cmd --prefix apps/web ci
+npm.cmd --prefix apps/web exec -- playwright install chromium
+pwsh -NoProfile -File tests/run_production_smoke.ps1
+```
+
+Тест использует отдельный постоянный Compose project `veriq-prod-smoke`.
+Linux CI использует `veriq-prod-ci`. Проверяются Chromium, статические ресурсы,
+RU/EN, прямой маршрут и fallback, живость Nginx при остановке API,
+различие liveness/readiness при остановке Redis и восстановление по повторной
+проверке. Браузер не должен обращаться к другим origin. Ожидаемые HTTP 50x
+для health-проб во время остановки допускаются. Ошибки JS и прочие ошибки
+консоли приводят к отказу. Сетевые вызовы и остановки реальны.
+
+Тесты восстанавливают остановленные сервисы и выполняют `down` без удаления
+томов. Trace, видео и скриншоты отключены. Проверки контейнеров и логов не
+печатают значения секретов. Browser smoke не заменяет продуктовые E2E.
