@@ -86,6 +86,9 @@ jobs:
       - name: Compare effective ACLs and exercise restricted logins
         run: |
           docker compose run --no-deps --rm -T migrate python - veriq audit_upgrade < tests/postgres_security_audit.py
+      - name: Verify worker process crash recovery and fencing
+        run: |
+          docker compose run --no-deps --rm -T migrate python - < tests/worker_lease_process.py
       - name: Stop isolated stack
         if: always()
         run: docker compose down --volumes

@@ -67,7 +67,7 @@ def process_next(
                     ).scalar_one()
                 if renewed:
                     continue
-            except SQLAlchemyError:
+            except Exception:  # noqa: BLE001 - any failed renewal invalidates local ownership
                 LOG.warning("Background lease renewal unavailable")
             lost.set()
             return
