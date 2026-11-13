@@ -306,21 +306,48 @@ def checks(
     assert sessions.resolve(elevated).user_id == user
     with api.begin() as connection:
         denied(lambda: service.require_fresh(connection, elevated, Purpose.SENSITIVE))
+    # Exercise the actual mutation entry point, not only its freshness helper.
+    before_events = query(
+        owner, "SELECT count(*) FROM auth_audit_events WHERE result='succeeded'"
+    )
+    factor_snapshot = "SELECT jsonb_agg(to_jsonb(f) ORDER BY f.id) FROM mfa_factors f"
+    before_factors = query(owner, factor_snapshot)
+    denied(lambda: service.disable(current, RequestContext.new()))  # rotated
+    denied(
+        lambda: service.disable(elevated, RequestContext.new())
+    )  # stale/wrong purpose
+    assert query(owner, factor_snapshot) == before_factors
+    assert (
+        query(owner, "SELECT count(*) FROM auth_audit_events WHERE result='succeeded'")
+        == before_events
+    )
     switched = sessions.rotate(elevated, organization_id=scope_a)
     assert sessions.resolve(switched).organization_id == scope_a
     with api.begin() as connection:
         denied(lambda: service.require_fresh(connection, switched, Purpose.SENSITIVE))
-    assert (
-        sessions.resolve(
-            sessions.rotate(switched, organization_id=scope_b)
-        ).organization_id
-        == scope_b
-    )
+    back = sessions.rotate(switched, organization_id=scope_b)
+    assert sessions.resolve(back).organization_id == scope_b
     assert not query(
         mfa_db,
         "SELECT public.veriq_mfa_can_disable(:user, CAST(:limits AS interval[]))",
         user=user,
         limits=list(sessions.policy.limits),
+    )
+
+    expired = back
+    query(
+        owner,
+        """UPDATE auth_sessions SET authenticated_at=now()-interval '3 hours',
+           created_at=now()-interval '3 hours', last_seen_at=now()-interval '2 hours',
+           idle_expires_at=now()-interval '1 minute'
+           WHERE id=:id""",
+        id=expired._gate(sessions.policy).session_id,
+    )
+    denied(lambda: service.disable(expired, RequestContext.new()))
+    assert query(owner, factor_snapshot) == before_factors
+    assert (
+        query(owner, "SELECT count(*) FROM auth_audit_events WHERE result='succeeded'")
+        == before_events
     )
 
     for statement in (

@@ -735,6 +735,7 @@ async function run(browser) {
   // Reset only the dedicated ephemeral Redis test instance after asserting its budget.
   compose("exec", "-T", "redis", "redis-cli", "FLUSHDB");
   await expect(operator, "/auth/mfa/challenge", { code: totp(seed) }, 204);
+  await expect(operator, "/auth/mfa/disable", {}, 401);
   await expect(operator, joining, { action: "set_intake", enabled: true }, 200);
   await expect(
     operator,
