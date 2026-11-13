@@ -10,16 +10,12 @@ from sqlalchemy.exc import SQLAlchemyError
 
 LOG = logging.getLogger(__name__)
 WAKE_QUEUE = "veriq:background:wake"
-MAX_ATTEMPTS = 3
 
 
 async def enqueue_probe(engine: Engine, redis: Redis, job_id: UUID) -> None:
     with engine.begin() as connection:
         connection.execute(
-            text("""
-            INSERT INTO background_jobs (id, kind) VALUES (:id, 'probe')
-            ON CONFLICT (id) DO NOTHING
-        """),
+            text("SELECT public.veriq_queue_enqueue(:id)"),
             {"id": job_id},
         )
     try:
@@ -43,40 +39,27 @@ def process_next(
     with engine.begin() as connection:
         connection.execute(text("SET LOCAL statement_timeout = '3s'"))
         row = connection.execute(
-            text("""
-            SELECT id, kind, attempts FROM background_jobs
-            WHERE status = 'pending' AND available_at <= now()
-            ORDER BY available_at, id LIMIT 1 FOR UPDATE SKIP LOCKED
-        """)
+            text("SELECT * FROM public.veriq_queue_claim()")
         ).first()
         if row is None:
             return False
 
         attempts = row.attempts + 1
-        status = "failed"
+        succeeded = False
         if row.kind == "probe":
             try:
                 with connection.begin_nested():
                     probe(connection)
-                status = "succeeded"
+                succeeded = True
             except SQLAlchemyError:
-                status = "pending" if attempts < MAX_ATTEMPTS else "failed"
                 LOG.warning("Background probe failed (attempt %d)", attempts)
         else:
             LOG.warning("Unknown background task kind rejected")
 
-        connection.execute(
-            text("""
-            UPDATE background_jobs
-            SET status = :status, attempts = :attempts,
-                available_at = clock_timestamp() + make_interval(secs => :delay)
-            WHERE id = :id
-        """),
-            {
-                "status": status,
-                "attempts": attempts,
-                "delay": 2**attempts if status == "pending" else 0,
-                "id": row.id,
-            },
-        )
+        finished = connection.execute(
+            text("SELECT public.veriq_queue_finish(:id,:success)"),
+            {"id": row.id, "success": succeeded},
+        ).scalar_one()
+        if not finished:
+            raise RuntimeError("Queue claim could not be completed")
     return True
