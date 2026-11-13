@@ -64,3 +64,14 @@ row-level isolation for a compromised MFA verifier. The recovery authority
 trigger and key rotation are outside the new call matrix. Existing
 Foundation integration tests cover application enrollment, replay, session
 policy and recovery transitions.
+
+## Session management contract
+
+tests/auth_session_acl.py checks five session-management signatures on both
+PostgreSQL databases. All are SECURITY DEFINER, owned by veriq_session_store,
+with pg_catalog, pg_temp search_path and no PUBLIC EXECUTE.
+API may call session use, current, browser rotation and audited revocation.
+MFA verifier may also call session use and the catalog auditor may check
+session current. The raw revoke helper has no runtime caller.
+Refresh rotates the existing session credential. Revoke-all includes the
+current session, and there is no keep-current variant in this contract.
