@@ -200,6 +200,11 @@ jobs:
           scratch alembic upgrade 0022
           test "$before" = "$(snapshot)"
           echo "0021 -> 0022 preserved all MFA fixture rows"
+          database -c 'UPDATE mfa_factors SET last_counter=42'
+          before="$(snapshot)"
+          scratch alembic upgrade 0023
+          test "$before" = "$(snapshot)"
+          echo "0022 -> 0023 preserved encrypted factors, counters and recovery history"
       - name: Verify staged trusted MFA boundary
         run: |
           docker compose run --no-deps --rm -T \

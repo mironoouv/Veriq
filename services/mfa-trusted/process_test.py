@@ -10,6 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
 from pathlib import Path
+from threading import Barrier
 from uuid import UUID, uuid4
 
 from psycopg import connect, sql
@@ -99,6 +100,36 @@ def main():
                 print(
                     "Trust boundary: SQL attestation requires trusted credentials and a current session proof"
                 )
+
+            def admin():
+                return connect(
+                    host=host,
+                    dbname="veriq",
+                    user="veriq_dev",
+                    password=os.environ["VERIQ_DB_PASSWORD"],
+                )
+
+            barrier = Barrier(2)
+
+            def sql_attempt(_):
+                with connect(
+                    host=host,
+                    dbname="veriq",
+                    user="veriq_mfa_trusted",
+                    password=password,
+                ) as db:
+                    barrier.wait(timeout=5)
+                    return db.execute(
+                        "SELECT public.veriq_trusted_mfa_totp(%s,%s,%s,%s,%s,%s,%s,%s)",
+                        (uuid4(), *scope, int(time.time()) // 30, encrypted),
+                    ).fetchone()[0]
+
+            with ThreadPoolExecutor(2) as pool:
+                assert sorted(pool.map(sql_attempt, range(2))) == [False, True]
+            with admin() as db:
+                db.execute(
+                    "UPDATE mfa_factors SET last_counter=-1 WHERE id=%s", (factor,)
+                )
         config = {
             **{k: v for k, v in os.environ.items() if k != "VERIQ_DB_PASSWORD"},
             "VERIQ_MFA_PEER_UID": "10001",
@@ -183,6 +214,74 @@ with socket.socket(socket.AF_UNIX) as s:
                     assert call(
                         request("attest_disable", {**args, "factor": str(uuid4())})
                     ) == {"error": "denied"}
+                    assert call(
+                        request("attest_disable", {**args, "verified": True})
+                    ) == {"error": "denied"}
+                    assert call(
+                        request("attest_disable", {**args, "counter": counter})
+                    ) == {"error": "denied"}
+                    key_path = root / "keys"
+                    original = key_path.read_text()
+                    key_path.write_text("{")
+                    damaged = subprocess.run(
+                        command,
+                        env=config,
+                        capture_output=True,
+                        timeout=5,
+                        check=False,
+                        **identity,
+                    )
+                    assert damaged.returncode == 1 and damaged.stderr == missing.stderr
+                    key_path.write_text(
+                        json.dumps(
+                            {
+                                "active": "fixture",
+                                "keys": {"fixture": os.urandom(32).hex()},
+                            }
+                        )
+                    )
+                    bad_config = {
+                        **config,
+                        "VERIQ_MFA_SOCKET": str(directory / "wrong.sock"),
+                    }
+                    with subprocess.Popen(
+                        command,
+                        env=bad_config,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        **identity,
+                    ) as bad:
+                        original_endpoint = endpoint
+                        endpoint = directory / "wrong.sock"
+                        try:
+                            deadline = time.monotonic() + 5
+                            while not endpoint.exists():
+                                assert (
+                                    bad.poll() is None and time.monotonic() < deadline
+                                )
+                                time.sleep(0.02)
+                            assert call(request("attest_disable", args)) == {
+                                "error": "denied"
+                            }
+                        finally:
+                            bad.terminate()
+                            assert bad.communicate(timeout=6) == (b"", b"")
+                            endpoint = original_endpoint
+                    key_path.write_text(original)
+                    with admin() as db:
+                        db.execute("""CREATE FUNCTION reject_fixture_attestation() RETURNS trigger LANGUAGE plpgsql AS
+                            $$ BEGIN RAISE EXCEPTION 'fixture denial'; END $$;
+                            CREATE TRIGGER reject_fixture_attestation BEFORE INSERT ON mfa_operation_attestations
+                            FOR EACH ROW EXECUTE FUNCTION reject_fixture_attestation()""")
+                    assert call(request("attest_disable", args)) == {"error": "denied"}
+                    with admin() as db:
+                        assert db.execute(
+                            "SELECT last_counter FROM mfa_factors WHERE id=%s",
+                            (factor,),
+                        ).fetchone() == (-1,)
+                        db.execute(
+                            "DROP TRIGGER reject_fixture_attestation ON mfa_operation_attestations"
+                        )
                     with ThreadPoolExecutor(2) as pool:
                         replies = list(
                             pool.map(call, [request("attest_disable", args)] * 2)
@@ -220,6 +319,13 @@ with socket.socket(socket.AF_UNIX) as s:
                     assert call(
                         request("attest_disable", {**args, "session": str(uuid4())})
                     ) == {"error": "denied"}
+                    with admin() as db:
+                        db.execute("ALTER DATABASE veriq ALLOW_CONNECTIONS false")
+                    assert call(request("health", {})) == {"error": "denied"}
+                    assert call(request("attest_disable", args)) == {"error": "denied"}
+                    assert call(request("check_fixture_totp", {"code": code})) == {
+                        "error": "denied"
+                    }
                 else:
                     assert call(request("check_fixture_totp", {"code": wrong})) == {
                         "matches": False
