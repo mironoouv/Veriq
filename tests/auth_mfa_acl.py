@@ -10,6 +10,7 @@ PURPOSE = "'fixture'::text"
 POLICY_TYPES = "uuid,uuid,smallint,interval[]"
 POLICY_ARGS = f"{ID},{ID},0::smallint,{LIMITS}"
 INVOKERS = {
+    f"veriq_base_session_limits({POLICY_TYPES})",
     f"veriq_session_limits({POLICY_TYPES})",
     f"veriq_pre_recovery_session_limits({POLICY_TYPES})",
     "veriq_recovery_permission(uuid,uuid,text)",
