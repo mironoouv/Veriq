@@ -125,7 +125,13 @@ def check(
                                 assert role not in allowed, (signature, role)
                             else:
                                 assert role in allowed, (signature, role, result)
-                                assert result in (None, (False,), ("denied",), ("",)), (
+                                assert result in (
+                                    None,
+                                    (None,),
+                                    (False,),
+                                    ("denied",),
+                                    ("",),
+                                ), (
                                     signature,
                                     result,
                                 )

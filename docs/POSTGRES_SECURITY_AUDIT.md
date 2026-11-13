@@ -50,3 +50,17 @@ caller. CI checks the same allowlist on clean and upgraded PostgreSQL 17.11
 databases. Proofs in these flows are bound to a global account, not to a
 caller-provided tenant. The SQL lifecycle checks rejection of a mismatched
 email, expiry, replay and stale credential versions.
+
+## MFA and independent recovery contract
+
+The signature inventory and exact runtime EXECUTE allowlists are in
+tests/auth_mfa_acl.py. All listed routines are owned by veriq_session_store
+with pg_catalog, pg_temp as search_path and no PUBLIC EXECUTE. Internal
+session policy and recovery authorization helpers include invoker functions.
+MFA verifier uses SQL functions plus direct factor table access for
+application-level verification and enrollment. Its DB credential is
+therefore part of the trusted MFA boundary. This matrix does not establish
+row-level isolation for a compromised MFA verifier. The recovery authority
+trigger and key rotation are outside the new call matrix. Existing
+Foundation integration tests cover application enrollment, replay, session
+policy and recovery transitions.
