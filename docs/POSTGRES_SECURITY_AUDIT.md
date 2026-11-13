@@ -36,3 +36,17 @@ SET ROLE. Raw SQL proof rejection creates no session or success event.
 The HTTP adapter owns attempt auditing. Registration, recovery, MFA
 administration, session rotation and other definer families remain outside
 this matrix.
+
+## Registration and password recovery contract
+
+The exact signatures and expected callers are recorded in
+tests/auth_recovery_acl.py. Signup and mail-outbox routines are owned by
+veriq_signup_store. The password routines are owned by veriq_session_store.
+The entry points are SECURITY DEFINER. The internal password-apply helper
+is SECURITY INVOKER. All use pg_catalog, pg_temp and have no PUBLIC EXECUTE. API handles signup and reset, the password
+verifier handles session-bound password change, and worker handles outbox
+delivery and notices. The internal password-apply routine has no runtime
+caller. CI checks the same allowlist on clean and upgraded PostgreSQL 17.11
+databases. Proofs in these flows are bound to a global account, not to a
+caller-provided tenant. The SQL lifecycle checks rejection of a mismatched
+email, expiry, replay and stale credential versions.

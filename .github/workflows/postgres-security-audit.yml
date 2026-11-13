@@ -152,6 +152,12 @@ jobs:
           )
           docker compose run --no-deps --rm -T "${runtime_args[@]}" migrate
           docker compose run --no-deps --rm -T "${runtime_args[@]}" migrate python - veriq audit_upgrade < tests/auth_issuer_acl.py
+      - name: Verify signup and password recovery ACLs
+        run: |
+          docker compose run --no-deps --rm -T \
+            -e VERIQ_TEST_LOGIN_VERIFIER_PASSWORD -e VERIQ_TEST_LOGIN_ISSUER_PASSWORD \
+            -e VERIQ_TEST_MFA_DB_PASSWORD -v "$PWD/tests:/audit:ro" migrate \
+            python /audit/auth_recovery_acl.py veriq audit_upgrade
       - name: Stop isolated stack
         if: always()
         run: docker compose down --volumes

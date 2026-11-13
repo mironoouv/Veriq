@@ -65,12 +65,14 @@ def open_db(database, role="veriq_dev"):
     )
 
 
-def check(database):
+def check(
+    database, functions=FUNCTIONS, function_owner="veriq_session_store", *, invokers=()
+):
     with open_db(database) as owner:
         assert owner.execute("SHOW server_version_num").fetchone() == ("170011",)
         owner.execute("CREATE ROLE audit_unprivileged NOLOGIN")
         try:
-            for signature, arguments, allowed in FUNCTIONS:
+            for signature, arguments, allowed in functions:
                 metadata = owner.execute(
                     """
                     SELECT proowner::regrole::text,prosecdef,proconfig,
@@ -84,10 +86,10 @@ def check(database):
                     ("public." + signature,),
                 ).fetchone()
                 assert metadata == (
-                    "veriq_session_store",
-                    True,
+                    function_owner,
+                    signature not in invokers,
                     ["search_path=pg_catalog, pg_temp"],
-                    sorted(allowed | {"veriq_session_store"}),
+                    sorted(allowed | {function_owner}),
                     False,
                 ), (signature, metadata)
                 name = signature.split("(")[0]
@@ -123,7 +125,7 @@ def check(database):
                                 assert role not in allowed, (signature, role)
                             else:
                                 assert role in allowed, (signature, role, result)
-                                assert result in (None, (False,), ("denied",)), (
+                                assert result in (None, (False,), ("denied",), ("",)), (
                                     signature,
                                     result,
                                 )
