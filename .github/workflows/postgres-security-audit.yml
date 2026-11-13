@@ -44,6 +44,7 @@ jobs:
           fixtures="$(mktemp -d)"
           cp tests/{catalog_audit_upgrade,academic_catalog_checks}.py "$fixtures/"
           git show f01b8c991cb3461f2201000770ee870e958a7209:apps/api/veriq/academic_catalog.py > "$fixtures/legacy.py"
+          chmod 755 "$fixtures"
           scratch() {
             docker compose run --no-deps --rm -T -e VERIQ_DB_NAME=audit_catalog_upgrade \
               -v "$fixtures:/fixtures:ro" migrate "$@"
