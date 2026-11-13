@@ -1,0 +1,16 @@
+services:
+  mfa-trusted:
+    image: veriq-mfa-trusted
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      VERIQ_MFA_PEER_UID: "10001"
+      VERIQ_MFA_SOCKET: /run/mfa/service.sock
+      VERIQ_TRUSTED_KEYRING: /run/secrets/keyring.json
+      VERIQ_TRUSTED_DB_PASSWORD_FILE: /run/secrets/database-password
+      VERIQ_MFA_SYNTHETIC_FACTOR: /run/secrets/fixture.json
+    volumes:
+      - ${VERIQ_MFA_IPC_DIR:?Set the private socket directory}:/run/mfa
+      - ${VERIQ_MFA_PRIVATE_DIR:?Set the service-only secret directory}:/run/secrets:ro
