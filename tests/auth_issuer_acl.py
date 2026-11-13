@@ -175,7 +175,25 @@ def browser_issue_contract(database):
         assert owner.execute(
             "SELECT event_type FROM auth_audit_events WHERE id=%s", (request,)
         ).fetchone() == ("password_verified",)
-        print(f"{database}: browser proof digest, issuance, replay and audit passed")
+        for scenario in ("expired", "stale"):
+            proof, request = uuid4(), uuid4()
+            assert verifier.execute(
+                "SELECT public.veriq_password_confirm(%s,%s,1::bigint,%s,NULL,'fixture',NULL,%s,%s)",
+                (proof, account, digest, request, request),
+            ).fetchone() == (True,)
+            if scenario == "expired":
+                owner.execute(
+                    "UPDATE auth_credential_proofs SET expires_at=now() WHERE id=%s",
+                    (proof,),
+                )
+            else:
+                owner.execute(
+                    "UPDATE users SET credential_version=2 WHERE id=%s", (account,)
+                )
+            issue(digest, "denied")
+        print(
+            f"{database}: browser proof digest, issuance, replay, expiry, stale version and audit passed"
+        )
 
 
 if __name__ == "__main__":
