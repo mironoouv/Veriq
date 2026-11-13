@@ -1,4 +1,4 @@
-"""Standalone synthetic-factor verification service for Linux."""
+"""Isolated MFA verification service for Linux."""
 
 import json
 import os
@@ -8,10 +8,14 @@ import stat
 import sys
 from pathlib import Path
 from time import time
-from uuid import UUID
+from uuid import UUID, uuid4
 
+from cryptography.exceptions import InvalidTag
+from psycopg import Error, connect
 from veriq.mfa_crypto import FactorKeys, matching_counter
 from veriq.mfa_ipc import IpcDenied, dispatch
+from veriq.sessions import SessionPolicy, SessionToken
+from veriq.tenant_access import AccessDenied
 
 
 def private_file(path: Path) -> bytes:
@@ -43,13 +47,18 @@ def serve() -> None:
     keys = FactorKeys(
         ring["active"], {k: bytes.fromhex(v) for k, v in ring["keys"].items()}
     )
-    fixture = json.loads(private_file(Path(os.environ["VERIQ_MFA_SYNTHETIC_FACTOR"])))
-    seed = keys.decrypt(
-        UUID(fixture["user"]),
-        UUID(fixture["factor"]),
-        fixture["key_id"],
-        bytes.fromhex(fixture["ciphertext"]),
-    )
+    host = os.environ.get("VERIQ_TRUSTED_DB_HOST")
+    seed = None
+    if host is None:
+        fixture = json.loads(
+            private_file(Path(os.environ["VERIQ_MFA_SYNTHETIC_FACTOR"]))
+        )
+        seed = keys.decrypt(
+            UUID(fixture["user"]),
+            UUID(fixture["factor"]),
+            fixture["key_id"],
+            bytes.fromhex(fixture["ciphertext"]),
+        )
     endpoint = Path(os.environ["VERIQ_MFA_SOCKET"])
     directory = endpoint.parent.lstat()
     if (
@@ -67,14 +76,80 @@ def serve() -> None:
     def health(args):
         if args:
             raise IpcDenied("Unexpected arguments")
+        if host:
+            with database() as db:
+                db.execute("SELECT 1")
         return {"ready": True}
 
     def verify(args):
         code = args.get("code")
         if set(args) != {"code"} or not isinstance(code, str) or len(code) != 6:
             raise IpcDenied("Invalid verification request")
+        assert seed is not None
         return {"matches": matching_counter(seed, code, int(time())) is not None}
 
+    def database():
+        return connect(
+            host=host,
+            dbname=os.environ["VERIQ_TRUSTED_DB_NAME"],
+            user="veriq_mfa_trusted",
+            password=password.decode().strip(),
+            connect_timeout=2,
+            options="-c statement_timeout=2000",
+        )
+
+    def attest_disable(args):
+        if set(args) != {
+            "account",
+            "factor",
+            "session",
+            "organization",
+            "token",
+            "code",
+        }:
+            raise IpcDenied("Invalid attestation arguments")
+        if any(not isinstance(v, str) for k, v in args.items() if k != "organization"):
+            raise IpcDenied("Invalid attestation arguments")
+        if args["organization"] is not None and not isinstance(
+            args["organization"], str
+        ):
+            raise IpcDenied("Invalid organization")
+        gate = SessionToken(args["token"])._gate(SessionPolicy())
+        if gate.session_id != UUID(args["session"]):
+            raise IpcDenied("Session mismatch")
+        scope = (
+            UUID(args["account"]),
+            UUID(args["factor"]),
+            gate.session_id,
+            gate.digest,
+            UUID(args["organization"]) if args["organization"] else None,
+        )
+        with database() as db:
+            row = db.execute(
+                "SELECT * FROM public.veriq_trusted_mfa_factor(%s,%s,%s,%s,%s)", scope
+            ).fetchone()
+            if row is None:
+                raise IpcDenied("Factor denied")
+            key, encrypted, tick = row
+            counter = matching_counter(
+                keys.decrypt(scope[0], scope[1], key, encrypted), args["code"], tick
+            )
+            proof = uuid4()
+            if counter is None or db.execute(
+                "SELECT public.veriq_trusted_mfa_totp(%s,%s,%s,%s,%s,%s,%s,%s)",
+                (proof, *scope, counter, encrypted),
+            ).fetchone() != (True,):
+                raise IpcDenied("Factor denied")
+        return {"attestation": str(proof)}
+
+    handlers = {
+        "health": health,
+        **(
+            {"attest_disable": attest_disable}
+            if host
+            else {"check_fixture_totp": verify}
+        ),
+    }
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     os.umask(0o177)
@@ -95,9 +170,16 @@ def serve() -> None:
                         response = dispatch(
                             peer,
                             peer_uid,
-                            {"health": health, "check_fixture_totp": verify},
+                            handlers,
                         )
-                    except (IpcDenied, OSError):
+                    except (
+                        ValueError,
+                        OSError,
+                        Error,
+                        InvalidTag,
+                        KeyError,
+                        AccessDenied,
+                    ):
                         response = {"error": "denied"}
                     try:
                         peer.sendall(json.dumps(response).encode("ascii") + b"\n")
