@@ -48,3 +48,33 @@ PostgreSQL does not validate TOTP. The right to call attest is reserved
 for the trusted process after it independently verifies the cryptographic
 proof. Keep the login disabled outside disposable tests until integration
 and atomic legacy cutover. The current IPC fixture does not call SQL.
+
+## PostgreSQL-backed verification (0023)
+
+For isolated integration, set VERIQ_TRUSTED_DB_HOST and
+VERIQ_TRUSTED_DB_NAME and provision a dedicated password for
+veriq_mfa_trusted through the database administrator. Keep the password
+file and keyring readable only by the service UID. The existing
+network-disabled fixture Compose file remains for the synthetic IPC test.
+A database-backed deployment requires a private database network and no
+published ports.
+
+The attest_disable IPC operation accepts the account, factor, session,
+organization, raw session token and TOTP. The service resolves the token
+digest, reads only a session-bound factor through a database function and
+decrypts it locally. PostgreSQL compares and advances the replay counter
+and issues the factor-disable attestation in one transaction. The service
+returns only the attestation ID. Database errors fail the operation and
+do not switch to the fixture handler.
+
+The SQL login remains trusted to submit a verified counter. The existing
+0022 entry points remain available to that login for the staged SQL suite.
+Legacy Auth still runs separately and must be cut over before claiming
+SEC-MFA-01 closed.
+
+The PostgreSQL credential is a privileged trust boundary. In 0023 it
+retains EXECUTE on attest and can issue a disable attestation directly
+when it also has valid session proof and passes SQL policy checks. The
+counter entry point likewise relies on the process to verify the code.
+IPC authentication does not constrain someone holding that SQL credential.
+Keep it isolated and unprovisioned outside the dedicated test setup.
