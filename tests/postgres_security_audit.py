@@ -109,6 +109,23 @@ def main() -> None:
             )
             denied(api, "INSERT INTO academic_catalog_events DEFAULT VALUES")
 
+            denied(api, "UPDATE academic_catalog_events SET action='edit' WHERE false")
+            for dbname in (clean, upgraded):
+                with connection(
+                    dbname, "veriq_dev", os.environ["VERIQ_DB_PASSWORD"]
+                ) as db:
+                    assert (
+                        db.execute("""
+                        SELECT rolcanlogin,rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolbypassrls
+                        FROM pg_roles WHERE rolname='veriq_catalog_auditor'
+                    """).fetchone()
+                        == (False,) * 6
+                    )
+                    assert db.execute("""
+                        SELECT count(*) FROM pg_auth_members
+                        WHERE member='veriq_catalog_auditor'::regrole
+                    """).fetchone() == (0,)
+
     for database in (clean, upgraded):
         for role, variable in (
             ("veriq_api", "VERIQ_API_DB_PASSWORD"),

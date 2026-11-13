@@ -319,9 +319,12 @@ revision, policies and audit history.
 Every inserted or updated catalog row writes an audit event in the same
 database transaction. Existing RLS still checks organization and grants.
 The trigger also checks the stored session against the supplied session
-proof, actor and row organization. Its long internal interval arguments
-leave the stored idle and absolute expiry timestamps authoritative. The
-HTTP service continues to apply its configured session policy.
+proof, actor and row organization. The trigger applies the Auth defaults: 30 minutes and 8 hours for privileged
+sessions, 2 hours and 12 hours for ordinary sessions. Stored deadlines can
+only shorten these caps. A newly tightened HTTP policy requires revoking
+existing sessions or shortening their stored deadlines for direct SQL.
+Recover from a faulty deployment with a forward migration that preserves
+the journal and mandatory trigger, or restore a consistent backup.
 
 The trigger runs as a non-login role with INSERT on the audit table and
 EXECUTE on the existing session validator. API loses direct audit INSERT.

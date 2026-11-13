@@ -38,7 +38,7 @@ def upgrade() -> None:
             PERFORM pg_advisory_xact_lock_shared(670013::bigint);
             IF NOT coalesce(public.veriq_session_current(
                 sid,digest,actor,NEW.organization_id,
-                ARRAY[interval '100 years',interval '100 years',interval '100 years',interval '100 years']
+                ARRAY[interval '30 minutes',interval '8 hours',interval '2 hours',interval '12 hours']
             ),false) THEN
                 RAISE EXCEPTION 'Catalog mutation requires a current session' USING ERRCODE='42501';
             END IF;
