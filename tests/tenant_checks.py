@@ -315,7 +315,7 @@ def main() -> None:
                 org=A,
                 subject=str(ALICE.user_id),
             )
-            connection.execute(text("SELECT id FROM background_jobs LIMIT 0"))
+            sql_denied(connection, "SELECT id FROM background_jobs LIMIT 0")
         print(
             "TEN-01: restricted runtime roles, tenant scope, ABAC, DML, revocation and pool reuse passed."
         )

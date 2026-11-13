@@ -69,3 +69,18 @@ Worker удаляет heartbeat и закрывает клиенты. Compose д
 владельца ресурсов по меткам Compose. Старые smoke-тома считайте данными
 до проверки содержимого и согласования удаления. Для обычного прогона
 глобальная очистка Docker не требуется.
+
+## SEC-WRK-01: transaction-bound queue access
+
+Revision 0019 replaces worker table access with enqueue, claim and finish
+functions. Enqueue only creates probe jobs. Claim locks an available row
+and records the current PostgreSQL transaction ID. Finish only accepts a
+pending row claimed by that transaction and computes status, attempts and
+retry delay in PostgreSQL. Existing queue records keep their values.
+
+This queue is shared: any worker can claim available work, and a worker
+can report the outcome of its own claim. A concurrent transaction cannot
+finish that claim. Rollback releases the row for redelivery. There is no
+durable worker identity, lease or fencing for external side effects. A
+committed unfinished claim can be reclaimed by a later transaction.
+Use a forward migration for recovery; downgrade would restore broad DML.

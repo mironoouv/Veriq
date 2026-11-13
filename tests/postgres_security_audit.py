@@ -197,6 +197,7 @@ def main() -> None:
                 denied(db, "SELECT * FROM auth_sessions")
                 denied(db, "DELETE FROM academic_catalog_events WHERE false")
                 if role == "veriq_api":
+                    denied(db, "SELECT * FROM public.veriq_queue_claim()")
                     denied(db, "SELECT public.veriq_import_purge()")
                     assert db.execute("SELECT count(*) FROM courses").fetchone() == (0,)
                     assert db.execute(
@@ -223,15 +224,50 @@ def main() -> None:
                     assert db.execute(
                         "SELECT public.veriq_import_purge()"
                     ).fetchone() == (0,)
-                    with db.transaction(force_rollback=True):
-                        db.execute(
-                            "INSERT INTO background_jobs(id,kind,status) VALUES ('00000000-0000-0000-0000-000000000001','audit-fixture','succeeded')"
-                        )
-                        assert db.execute(
-                            "UPDATE background_jobs SET kind='audit-modified',status='pending',attempts=2 WHERE kind='audit-fixture' RETURNING kind,status,attempts"
-                        ).fetchone() == ("audit-modified", "pending", 2)
-                        print("AUDIT FINDING: worker can rewrite a completed queue row")
+                    denied(db, "SELECT * FROM background_jobs")
+                    denied(db, "INSERT INTO background_jobs DEFAULT VALUES")
+                    denied(
+                        db,
+                        "UPDATE background_jobs SET kind='probe',status='pending',attempts=0,available_at=now()",
+                    )
                     denied(db, "DELETE FROM background_jobs WHERE false")
+                    job = uuid4()
+                    db.execute("SELECT public.veriq_queue_enqueue(%s)", (job,))
+                    db.execute("SELECT public.veriq_queue_enqueue(%s)", (job,))
+                    with db.transaction(force_rollback=True):
+                        assert db.execute(
+                            "SELECT * FROM public.veriq_queue_claim()"
+                        ).fetchone() == (job, "probe", 0)
+                        with connection(database, role, os.environ[variable]) as other:
+                            assert (
+                                other.execute(
+                                    "SELECT * FROM public.veriq_queue_claim()"
+                                ).fetchone()
+                                is None
+                            )
+                            other.execute("SET lock_timeout='1s'")
+                            assert other.execute(
+                                "SELECT public.veriq_queue_finish(%s,true)", (job,)
+                            ).fetchone() == (False,)
+                    with db.transaction():
+                        assert db.execute(
+                            "SELECT * FROM public.veriq_queue_claim()"
+                        ).fetchone() == (job, "probe", 0)
+                        assert db.execute(
+                            "SELECT public.veriq_queue_finish(%s,true)", (job,)
+                        ).fetchone() == (True,)
+                        assert db.execute(
+                            "SELECT public.veriq_queue_finish(%s,false)", (job,)
+                        ).fetchone() == (False,)
+                    assert (
+                        db.execute(
+                            "SELECT * FROM public.veriq_queue_claim()"
+                        ).fetchone()
+                        is None
+                    )
+                    print(
+                        "Worker queue: concurrent claim isolated, rollback redelivered, completion immutable"
+                    )
 
 
 if __name__ == "__main__":

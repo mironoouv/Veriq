@@ -228,17 +228,17 @@ def main() -> None:
         )
         assert result.returncode != 0
         assert (
-            "Downgrading 0018 would remove mandatory catalog auditing" in result.stderr
+            "Downgrading 0019 would restore broad worker queue privileges" in result.stderr
         )
         scratch(catalog_db, "alembic", "current", "--check-heads")
         scratch(catalog_db, "python", "-", "after-downgrade", stdin=catalog_checks)
         print(
-            "0017 empty downgrade succeeded and 0018 downgrade refused without losing audit."
+            "0017 empty downgrade succeeded and 0019 downgrade refused without losing audit."
         )
     finally:
         database(f"DROP DATABASE {catalog_db}")
     print(
-        "Identity smoke: fresh install, upgrades through 0018, runtime roles, TEN-01 and sessions passed."
+        "Identity smoke: fresh install, upgrades through 0019, runtime roles, TEN-01 and sessions passed."
     )
 
 

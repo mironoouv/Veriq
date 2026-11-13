@@ -67,6 +67,22 @@ jobs:
           scratch python -c 'import runpy,sys; sys.path.insert(0,"/fixtures"); runpy.run_module("catalog_audit_upgrade",run_name="__main__")'
           snapshot > "$fixtures/final.jsonl"
           test "$(wc -l < "$fixtures/final.jsonl")" -eq 40
+      - name: Preserve queued jobs from 0018 to 0019
+        run: |
+          docker compose exec -T postgres createdb -U veriq_dev audit_queue_upgrade
+          scratch() {
+            docker compose run --no-deps --rm -T -e VERIQ_DB_NAME=audit_queue_upgrade migrate "$@"
+          }
+          database() {
+            docker compose exec -T postgres psql -XAt -v ON_ERROR_STOP=1 -U veriq_dev -d audit_queue_upgrade "$@"
+          }
+          scratch alembic upgrade 0018
+          database -c "INSERT INTO background_jobs(id,kind,status,attempts) VALUES (gen_random_uuid(),'probe','pending',1),(gen_random_uuid(),'probe','succeeded',2)"
+          before="$(database -c 'SELECT id,kind,status,attempts,available_at FROM background_jobs ORDER BY id')"
+          scratch alembic upgrade 0019
+          after="$(database -c 'SELECT id,kind,status,attempts,available_at FROM background_jobs ORDER BY id')"
+          test "$before" = "$after"
+          test "$(database -c 'SELECT count(*) FROM background_jobs WHERE claim_xid IS NULL')" = 2
       - name: Compare effective ACLs and exercise restricted logins
         run: |
           docker compose run --no-deps --rm -T migrate python - veriq audit_upgrade < tests/postgres_security_audit.py
