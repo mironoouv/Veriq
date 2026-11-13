@@ -1,6 +1,7 @@
 """Check MFA and independent recovery SQL entry point privileges."""
 
 import sys
+from uuid import uuid4
 
 from auth_issuer_acl import DIGEST, ID, LIMITS, check, open_db
 
@@ -90,7 +91,74 @@ def recovery_trigger(database):
         ), row
 
 
+def factor_acl(database):
+    with open_db(database, "veriq_mfa_verifier") as db:
+        assert db.execute("SELECT session_user,current_user").fetchone() == (
+            "veriq_mfa_verifier",
+            "veriq_mfa_verifier",
+        )
+        rows = db.execute("""
+            SELECT relname, relrowsecurity, relforcerowsecurity,
+                   has_table_privilege(current_user,oid,'INSERT'),
+                   has_table_privilege(current_user,oid,'UPDATE'),
+                   has_table_privilege(current_user,oid,'DELETE')
+            FROM pg_class WHERE relnamespace='public'::regnamespace
+              AND relname IN ('mfa_factors','mfa_recovery_codes','mfa_challenges','mfa_session_assurance')
+            ORDER BY relname
+        """).fetchall()
+        assert len(rows) == 4
+        assert all(row[1:] == (False, False, True, True, True) for row in rows), rows
+        print(f"{database}: trusted verifier has direct factor DML; no table RLS")
+
+
+def factor_dml(database):
+    first, second = uuid4(), uuid4()
+    with open_db(database) as owner, open_db(database, "veriq_mfa_verifier") as db:
+        for account in (first, second):
+            owner.execute(
+                "INSERT INTO users(id,email_normalized,password_hash) VALUES (%s,%s,'fixture')",
+                (account, f"{account.hex}@example.invalid"),
+            )
+        try:
+            with db.transaction(force_rollback=True):
+                for account in (first, second):
+                    assert (
+                        db.execute(
+                            """
+                        INSERT INTO mfa_factors(user_id,id,key_id,ciphertext,pending_until)
+                        VALUES (%s,%s,'fixture',%s,now()+interval '5 minutes')
+                    """,
+                            (account, uuid4(), b"synthetic"),
+                        ).rowcount
+                        == 1
+                    )
+                assert (
+                    db.execute(
+                        "UPDATE mfa_factors SET confirmed_at=now() WHERE user_id=%s",
+                        (second,),
+                    ).rowcount
+                    == 1
+                )
+                assert (
+                    db.execute(
+                        "DELETE FROM mfa_factors WHERE user_id=%s", (second,)
+                    ).rowcount
+                    == 1
+                )
+            assert owner.execute(
+                "SELECT count(*) FROM mfa_factors WHERE user_id IN (%s,%s)",
+                (first, second),
+            ).fetchone() == (0,)
+        finally:
+            owner.execute("DELETE FROM users WHERE id IN (%s,%s)", (first, second))
+    print(
+        f"{database}: trusted MFA login performed synthetic factor DML without a session; rolled back"
+    )
+
+
 if __name__ == "__main__":
     for database in sys.argv[1:]:
         check(database, FUNCTIONS, invokers=INVOKERS)
         recovery_trigger(database)
+        factor_acl(database)
+        factor_dml(database)
