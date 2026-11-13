@@ -227,18 +227,16 @@ def main() -> None:
             timeout=120,
         )
         assert result.returncode != 0
-        assert (
-            "Downgrading 0019 would restore broad worker queue privileges" in result.stderr
-        )
+        assert "Downgrading 0020 would discard active queue leases" in result.stderr
         scratch(catalog_db, "alembic", "current", "--check-heads")
         scratch(catalog_db, "python", "-", "after-downgrade", stdin=catalog_checks)
         print(
-            "0017 empty downgrade succeeded and 0019 downgrade refused without losing audit."
+            "0017 empty downgrade succeeded and 0020 downgrade refused without losing audit."
         )
     finally:
         database(f"DROP DATABASE {catalog_db}")
     print(
-        "Identity smoke: fresh install, upgrades through 0019, runtime roles, TEN-01 and sessions passed."
+        "Identity smoke: fresh install, upgrades through 0020, runtime roles, TEN-01 and sessions passed."
     )
 
 

@@ -9,7 +9,7 @@ from threading import Event
 from time import monotonic, time
 from types import FrameType
 from typing import cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from cryptography.fernet import Fernet
 from redis.exceptions import RedisError
@@ -71,10 +71,11 @@ async def main() -> int:
         signal.signal(signal.SIGTERM, stop)
         signal.signal(signal.SIGINT, stop)
         HEARTBEAT.unlink(missing_ok=True)
+        owner = uuid4()
         purge_after = monotonic()
         while not stopped.is_set():
             try:
-                processed = process_next(engine)
+                processed = process_next(engine, owner=owner)
                 if monotonic() >= purge_after:
                     with engine.begin() as connection:
                         connection.exec_driver_sql("SET LOCAL statement_timeout='2s'")

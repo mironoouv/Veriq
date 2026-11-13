@@ -84,3 +84,25 @@ finish that claim. Rollback releases the row for redelivery. There is no
 durable worker identity, lease or fencing for external side effects. A
 committed unfinished claim can be reclaimed by a later transaction.
 Use a forward migration for recovery; downgrade would restore broad DML.
+
+## Durable lease (0020)
+
+Claim commits a running row with a 12-second lease. The worker renews it
+every 3 seconds using another connection, leaving room for the 3-second
+SQL statement timeout and transient scheduling delays. PostgreSQL owns
+the expiry clock. Redis only wakes polling workers.
+
+Each claim consumes one of three attempts and uses that number as a
+per-job fencing token. Job UUIDs remain stable and must not be reused.
+A failed handler retries after 2 or 4 seconds. After a crash, expiry plus
+the same backoff makes the job eligible again. A poll finalizes an expired
+third attempt as failed. Success is terminal. A worker that loses its
+lease cannot commit handler SQL: finish and handler effects share a
+transaction, and the current bounded SQL statement can finish before rollback.
+
+Delivery is at least once. The worker UUID identifies a process
+incarnation, not a separate database principal. External effects can
+repeat across crashes and require receiver-side idempotency or fencing.
+SMTP and other existing queues retain their own delivery semantics.
+Drain old worker processes before applying 0020, then restart on the new
+code. Downgrade is refused because it would discard leases.
