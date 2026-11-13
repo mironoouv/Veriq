@@ -49,3 +49,5 @@
 
 - [PR #20](https://github.com/mironoouv/Veriq/pull/20) принят с уточнениями и объединён squash-коммитом `9b7cd769984288980ea903d732410cff06c2ee09`. Локальный main обновлён. [План Academic & Studio](../../planning/ACADEMIC_STUDIO.md) APPROVED для Slice 1. [CI PR #20](https://github.com/mironoouv/Veriq/actions/runs/43306043556) прошёл.
 - Slice 1 в ветке `feature/academic-01-catalog`: ревизия `0016`, изолированный каталог courses и study_groups, архив и тестовый HTTPS API/Vue. Slice 2 ждёт ревью. Public Auth остаётся NOT READY.
+
+- PR #21 returned for changes after independent review. Revision 0017 adds catalog restoration, with a version check and an audit event. Acceptance awaits repeat independent review.

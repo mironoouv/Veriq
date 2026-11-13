@@ -13,6 +13,7 @@ interface CatalogItem {
 interface CatalogPage {
   items: CatalogItem[];
   total: number;
+  can_restore: boolean;
 }
 
 const { t } = useI18n({
@@ -34,6 +35,7 @@ const { t } = useI18n({
       create: "Создать",
       edit: "Редактировать",
       archive: "Архивировать",
+      restore: "Восстановить",
       archiveQuestion: "Переместить «{title}» в архив?",
       title: "Название",
       description: "Описание",
@@ -60,6 +62,7 @@ const { t } = useI18n({
       create: "Create",
       edit: "Edit",
       archive: "Archive",
+      restore: "Restore",
       archiveQuestion: "Archive “{title}”?",
       title: "Title",
       description: "Description",
@@ -76,6 +79,7 @@ const route = useRoute();
 const organization = computed(() => String(route.params.organizationId ?? ""));
 const kind = ref<"courses" | "study_groups">("courses");
 const archived = ref(false);
+const canRestore = ref(false);
 const query = ref("");
 const page = ref(1);
 const items = ref<CatalogItem[]>([]);
@@ -107,6 +111,7 @@ async function load() {
   const generation = ++readGeneration;
   items.value = [];
   total.value = 0;
+  canRestore.value = false;
   error.value = "";
   loading.value = true;
   const params = new URLSearchParams({
@@ -127,6 +132,7 @@ async function load() {
     if (generation !== readGeneration) return;
     items.value = data.items;
     total.value = data.total;
+    canRestore.value = data.can_restore;
   } catch {
     if (generation === readGeneration) error.value = "failed";
   } finally {
@@ -166,13 +172,19 @@ function edit(item: CatalogItem | null) {
   description.value = item?.description ?? "";
 }
 
-async function mutate(item?: CatalogItem) {
+async function mutate(item?: CatalogItem, restore = false) {
   const generation = scopeGeneration;
   const base = endpoint.value;
   const current = editing.value;
-  const action = item ? "archive" : current ? "edit" : "create";
+  const action = item
+    ? restore
+      ? "restore"
+      : "archive"
+    : current
+      ? "edit"
+      : "create";
   const target = item ?? current;
-  const url = target ? `${base}/${target.id}${item ? "/archive" : ""}` : base;
+  const url = target ? `${base}/${target.id}${item ? `/${action}` : ""}` : base;
   const body = item
     ? { version: item.version }
     : {
@@ -305,7 +317,9 @@ async function mutate(item?: CatalogItem) {
           <tr>
             <th scope="col">{{ t("title") }}</th>
             <th scope="col">{{ t("description") }}</th>
-            <th v-if="!archived" scope="col">{{ t("actions") }}</th>
+            <th v-if="!archived || canRestore" scope="col">
+              {{ t("actions") }}
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -325,6 +339,16 @@ async function mutate(item?: CatalogItem) {
                 "
               >
                 {{ t("archive") }}
+              </button>
+            </td>
+            <td v-else-if="canRestore">
+              <button
+                class="btn btn-sm"
+                type="button"
+                :disabled="saving"
+                @click="mutate(item, true)"
+              >
+                {{ t("restore") }}
               </button>
             </td>
           </tr>

@@ -42,6 +42,10 @@ class CatalogArchive(BaseModel):
     version: int = Field(strict=True, ge=1, le=2147483647)
 
 
+class CatalogRestore(CatalogArchive):
+    pass
+
+
 class CatalogRow(BaseModel):
     id: UUID
     title: str
@@ -55,6 +59,7 @@ class CatalogRow(BaseModel):
 class CatalogPage(BaseModel):
     items: list[CatalogRow]
     total: int
+    can_restore: bool = False
 
 
 _FIELDS = "id,title,description,status,version,created_at,updated_at"
@@ -115,6 +120,15 @@ class AcademicCatalog:
             return CatalogPage(
                 items=[CatalogRow.model_validate(dict(row)) for row in rows],
                 total=count,
+                can_restore=archived
+                and bool(
+                    connection.execute(
+                        text(
+                            "SELECT public.veriq_catalog_permission(:org,'academic.catalog.manage')"
+                        ),
+                        {"org": org},
+                    ).scalar_one()
+                ),
             )
 
     def write(
@@ -133,14 +147,19 @@ class AcademicCatalog:
             connection = access.connection
             params: dict[str, object] = {"org": org, "item": item}
             if isinstance(data, CatalogArchive):
-                action = "archive"
+                restoring = isinstance(data, CatalogRestore)
+                action = "restore" if restoring else "archive"
                 access.require(ResourcePolicy("academic.catalog.archive"), resource)
-                params["version"] = data.version
+                params.update(
+                    version=data.version,
+                    source="archived" if restoring else "active",
+                    destination="active" if restoring else "archived",
+                )
                 row = (
                     connection.execute(
                         text(f"""
-                    UPDATE public.{kind.value} SET status='archived',version=version+1,updated_at=clock_timestamp()
-                    WHERE organization_id=:org AND id=:item AND status='active' AND version=:version RETURNING {_FIELDS}
+                    UPDATE public.{kind.value} SET status=:destination,version=version+1,updated_at=clock_timestamp()
+                    WHERE organization_id=:org AND id=:item AND status=:source AND version=:version RETURNING {_FIELDS}
                 """),
                         params,
                     )

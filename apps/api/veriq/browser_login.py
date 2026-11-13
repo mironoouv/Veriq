@@ -26,6 +26,7 @@ from veriq.academic_catalog import (
     CatalogInput,
     CatalogKind,
     CatalogPage,
+    CatalogRestore,
     CatalogRow,
 )
 from veriq.auth_audit import AuthEvent, AuthResult, RequestContext, append_attempt
@@ -1140,6 +1141,18 @@ def browser_router(
         ) -> Response:
             return await catalog_write(
                 organization_id, kind, item_id, request, CatalogArchive
+            )
+
+        @router.post(
+            catalog_path + "/{item_id}/restore",
+            response_model=CatalogRow,
+            openapi_extra=_body_schema(CatalogRestore),
+        )
+        async def catalog_restore(
+            organization_id: UUID, kind: CatalogKind, item_id: UUID, request: Request
+        ) -> Response:
+            return await catalog_write(
+                organization_id, kind, item_id, request, CatalogRestore
             )
 
     return router

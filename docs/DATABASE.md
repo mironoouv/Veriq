@@ -299,3 +299,11 @@ Mutations use the shared authority guard before acquiring the session row
 lock, so permission revocation and writes serialize. Existing Org Admin
 roles receive catalog permissions in the migration. New roles need explicit
 provisioning. Downgrade refuses non-empty catalogs.
+
+Revision 0017 adds the restore transition without changing revision 0016.
+The existing API role can move an archived row to active only with catalog
+management and archive permission in its tenant. A trigger prevents changing
+the title or description on an archived row, including during restoration.
+The service increments the version and appends a restore event in the same
+transaction. Restoration keeps the original ID and has no effect on other
+academic or exam processes.

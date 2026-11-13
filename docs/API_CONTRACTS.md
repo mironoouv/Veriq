@@ -174,3 +174,9 @@ the internal creation digest. Out-of-scope records and denied requests return
 Catalog permission codes are academic.catalog.read, academic.catalog.manage
 and academic.catalog.archive. Session tenant must match the URL. The explicit
 academic test overlay enables endpoints under the existing test Auth gate.
+
+POST /{id}/restore accepts the archived record version and requires read,
+archive and manage permissions. The response preserves the ID and advances
+the version. A stale version or an already active record returns 409 and
+does not append an audit event. Unknown or out-of-scope IDs return 404.
+Archived lists include can_restore for rendering the action.

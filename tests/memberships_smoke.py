@@ -210,7 +210,7 @@ def main() -> None:
     finally:
         database(f"DROP DATABASE {catalog_db}")
     print(
-        "Identity smoke: fresh install, upgrades through 0016, runtime roles, TEN-01 and sessions passed."
+        "Identity smoke: fresh install, upgrades through 0017, runtime roles, TEN-01 and sessions passed."
     )
 
 

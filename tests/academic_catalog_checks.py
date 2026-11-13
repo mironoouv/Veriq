@@ -14,6 +14,7 @@ from veriq.academic_catalog import (
     CatalogInput,
     CatalogKind,
     CatalogPage,
+    CatalogRestore,
 )
 from veriq.auth_credentials import CredentialVerifier
 from veriq.database import create_database_engine
@@ -205,6 +206,51 @@ def run(owner: Engine, api: Engine) -> None:
             ).scalar_one()
             == 2
         )
+    for kind in CatalogKind:
+        restored_id = uuid4()
+        original = catalog.write(actor, ORG, kind, restored_id, entry, uuid4())
+        archived = catalog.write(
+            actor,
+            ORG,
+            kind,
+            restored_id,
+            CatalogArchive(version=original.version),
+            uuid4(),
+        )
+
+        def restore(_: int) -> str:
+            try:
+                result = catalog.write(
+                    actor,
+                    ORG,
+                    kind,
+                    restored_id,
+                    CatalogRestore(version=archived.version),
+                    uuid4(),
+                )
+            except CatalogConflict:
+                return "conflict"
+            assert result.id == original.id and result.status == "active"
+            assert result.version == archived.version + 1
+            return "restored"
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            assert sorted(pool.map(restore, range(2))) == ["conflict", "restored"]
+
+        with owner.begin() as conn:
+            actions = (
+                conn.execute(
+                    text(
+                        "SELECT action FROM academic_catalog_events "
+                        "WHERE organization_id=:org AND (course_id=:id OR group_id=:id)"
+                    ),
+                    {"org": ORG, "id": restored_id},
+                )
+                .scalars()
+                .all()
+            )
+            assert sorted(actions) == ["archive", "create", "restore"]
+
     with ThreadPoolExecutor(max_workers=1) as pool:
         with owner.begin() as conn:
             conn.execute(
@@ -215,7 +261,13 @@ def run(owner: Engine, api: Engine) -> None:
                 {"org": ORG, "actor": ADMIN},
             )
             write = pool.submit(
-                catalog.write, actor, ORG, course, uuid4(), entry, uuid4()
+                catalog.write,
+                actor,
+                ORG,
+                course,
+                item,
+                CatalogRestore(version=3),
+                uuid4(),
             )
         try:
             write.result()

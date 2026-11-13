@@ -435,6 +435,14 @@ async function catalogJourney(operator, org, other) {
   await page.getByRole("textbox", { name: "Поиск по названию" }).fill("");
   await browserExpect(revised).toBeVisible();
 
+  phase = "Academic catalog Vue restoration";
+  await revised.getByRole("button", { name: "Восстановить" }).click();
+  await browserExpect(revised).toHaveCount(0);
+  await page
+    .getByRole("combobox", { name: "Архив", exact: true })
+    .selectOption({ label: "Активные" });
+  await browserExpect(revised).toBeVisible();
+
   phase = "Academic catalog Vue group creation and tenant switch";
   const catalogSelect = page.getByRole("combobox", {
     name: "Учебная структура",
