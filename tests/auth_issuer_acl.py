@@ -65,7 +65,9 @@ def open_db(database, role="veriq_dev"):
     )
 
 
-def check(database, functions=FUNCTIONS, function_owner="veriq_session_store"):
+def check(
+    database, functions=FUNCTIONS, function_owner="veriq_session_store", *, invokers=()
+):
     with open_db(database) as owner:
         assert owner.execute("SHOW server_version_num").fetchone() == ("170011",)
         owner.execute("CREATE ROLE audit_unprivileged NOLOGIN")
@@ -85,7 +87,7 @@ def check(database, functions=FUNCTIONS, function_owner="veriq_session_store"):
                 ).fetchone()
                 assert metadata == (
                     function_owner,
-                    True,
+                    signature not in invokers,
                     ["search_path=pg_catalog, pg_temp"],
                     sorted(allowed | {function_owner}),
                     False,

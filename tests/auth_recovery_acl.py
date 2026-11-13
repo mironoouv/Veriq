@@ -129,5 +129,9 @@ def lifecycle(database):
 if __name__ == "__main__":
     for database in sys.argv[1:]:
         check(database, SIGNUP, "veriq_signup_store")
-        check(database, PASSWORD)
+        check(
+            database,
+            PASSWORD,
+            invokers={"veriq_password_apply(uuid,text,text,uuid,uuid)"},
+        )
         lifecycle(database)
