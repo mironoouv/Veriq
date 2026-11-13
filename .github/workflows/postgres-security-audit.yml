@@ -1,0 +1,45 @@
+name: PostgreSQL security audit
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  postgres-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      COMPOSE_PROJECT_NAME: veriq-pg-audit
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Configure disposable database
+        run: |
+          for variable in VERIQ_DB_PASSWORD VERIQ_API_DB_PASSWORD VERIQ_WORKER_DB_PASSWORD; do
+            password="$(openssl rand -hex 32)"
+            echo "::add-mask::$password"
+            echo "$variable=$password" >> "$GITHUB_ENV"
+          done
+      - name: Start PostgreSQL 17.11 and provision runtime logins
+        run: |
+          docker compose up -d --wait postgres
+          docker compose build migrate
+          docker compose run --rm -T migrate
+          docker compose exec -T postgres createdb -U veriq_dev audit_upgrade
+      - name: Upgrade preserved catalog fixtures
+        run: |
+          scratch() {
+            docker compose run --no-deps --rm -T -e VERIQ_DB_NAME=audit_upgrade migrate "$@"
+          }
+          scratch alembic upgrade 0015
+          scratch python - seed < tests/academic_catalog_checks.py
+          scratch alembic upgrade head
+          scratch python - < tests/academic_catalog_checks.py
+      - name: Compare effective ACLs and exercise restricted logins
+        run: |
+          docker compose run --no-deps --rm -T migrate python - veriq audit_upgrade < tests/postgres_security_audit.py
+      - name: Stop isolated stack
+        if: always()
+        run: docker compose down --volumes
