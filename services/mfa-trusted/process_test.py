@@ -109,6 +109,7 @@ def main():
                     password=os.environ["VERIQ_DB_PASSWORD"],
                 )
 
+            sql_counter = int(time.time()) // 30
             barrier = Barrier(2)
 
             def sql_attempt(_):
@@ -121,7 +122,7 @@ def main():
                     barrier.wait(timeout=5)
                     return db.execute(
                         "SELECT public.veriq_trusted_mfa_totp(%s,%s,%s,%s,%s,%s,%s,%s)",
-                        (uuid4(), *scope, int(time.time()) // 30, encrypted),
+                        (uuid4(), *scope, sql_counter, encrypted),
                     ).fetchone()[0]
 
             with ThreadPoolExecutor(2) as pool:
