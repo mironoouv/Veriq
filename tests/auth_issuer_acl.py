@@ -2,6 +2,7 @@
 
 import os
 import sys
+from uuid import uuid4
 
 from psycopg import connect, errors, sql
 
