@@ -15,6 +15,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Configure disposable database
         run: |
           for variable in VERIQ_DB_PASSWORD VERIQ_API_DB_PASSWORD VERIQ_WORKER_DB_PASSWORD; do
@@ -37,6 +38,35 @@ jobs:
           scratch python - seed < tests/academic_catalog_checks.py
           scratch alembic upgrade head
           scratch python - < tests/academic_catalog_checks.py
+      - name: Preserve populated catalog and audit from 0017 to 0018
+        run: |
+          docker compose exec -T postgres createdb -U veriq_dev audit_catalog_upgrade
+          fixtures="$(mktemp -d)"
+          cp tests/{catalog_audit_upgrade,academic_catalog_checks}.py "$fixtures/"
+          git show f01b8c991cb3461f2201000770ee870e958a7209:apps/api/veriq/academic_catalog.py > "$fixtures/legacy.py"
+          chmod 755 "$fixtures"
+          scratch() {
+            docker compose run --no-deps --rm -T -e VERIQ_DB_NAME=audit_catalog_upgrade \
+              -v "$fixtures:/fixtures:ro" migrate "$@"
+          }
+          snapshot() {
+            docker compose exec -T postgres psql -XAt -v ON_ERROR_STOP=1 -U veriq_dev -d audit_catalog_upgrade <<'SQL'
+          SELECT to_jsonb(t) FROM courses t ORDER BY organization_id,id;
+          SELECT to_jsonb(t) FROM study_groups t ORDER BY organization_id,id;
+          SELECT to_jsonb(t) FROM academic_catalog_events t ORDER BY id;
+          SQL
+          }
+          scratch alembic upgrade 0017
+          scratch python -c 'import runpy,sys; sys.path.insert(0,"/fixtures"); sys.modules["veriq.academic_catalog"] = __import__("legacy"); runpy.run_module("catalog_audit_upgrade",run_name="__main__")' seed
+          snapshot > "$fixtures/before.jsonl"
+          test "$(wc -l < "$fixtures/before.jsonl")" -eq 20
+          scratch alembic upgrade 0018
+          snapshot > "$fixtures/after.jsonl"
+          cmp "$fixtures/before.jsonl" "$fixtures/after.jsonl"
+          echo "0017 -> 0018: all 4 catalog rows and 16 historical audit rows identical"
+          scratch python -c 'import runpy,sys; sys.path.insert(0,"/fixtures"); runpy.run_module("catalog_audit_upgrade",run_name="__main__")'
+          snapshot > "$fixtures/final.jsonl"
+          test "$(wc -l < "$fixtures/final.jsonl")" -eq 40
       - name: Compare effective ACLs and exercise restricted logins
         run: |
           docker compose run --no-deps --rm -T migrate python - veriq audit_upgrade < tests/postgres_security_audit.py

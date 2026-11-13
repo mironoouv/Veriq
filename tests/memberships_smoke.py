@@ -116,8 +116,7 @@ def main() -> None:
     )
     database(f"CREATE DATABASE {database_name}")
     try:
-        scratch(database_name, "alembic", "upgrade", "head")
-        scratch(database_name, "alembic", "current", "--check-heads")
+        scratch(database_name, "alembic", "upgrade", "0017")
         scratch(database_name, "alembic", "downgrade", "0002")
         scratch(database_name, "python", "-", "seed", stdin=checks)
         scratch(database_name, "alembic", "upgrade", "0003")
@@ -204,10 +203,9 @@ def main() -> None:
     try:
         scratch(catalog_db, "alembic", "upgrade", "0015")
         scratch(catalog_db, "python", "-", "seed", stdin=catalog_checks)
-        scratch(catalog_db, "alembic", "upgrade", "head")
-        scratch(catalog_db, "alembic", "current", "--check-heads")
-        scratch(catalog_db, "alembic", "downgrade", "0016")
         scratch(catalog_db, "alembic", "upgrade", "0017")
+        scratch(catalog_db, "alembic", "downgrade", "0016")
+        scratch(catalog_db, "alembic", "upgrade", "head")
         scratch(catalog_db, "python", "-", stdin=catalog_checks)
         result = subprocess.run(
             [
@@ -230,18 +228,17 @@ def main() -> None:
         )
         assert result.returncode != 0
         assert (
-            "Cannot downgrade 0017: restore audit history must be preserved"
-            in result.stderr
+            "Downgrading 0018 would remove mandatory catalog auditing" in result.stderr
         )
         scratch(catalog_db, "alembic", "current", "--check-heads")
         scratch(catalog_db, "python", "-", "after-downgrade", stdin=catalog_checks)
         print(
-            "0017 downgrade succeeded before restore and refused afterward without losing audit."
+            "0017 empty downgrade succeeded and 0018 downgrade refused without losing audit."
         )
     finally:
         database(f"DROP DATABASE {catalog_db}")
     print(
-        "Identity smoke: fresh install, upgrades through 0017, runtime roles, TEN-01 and sessions passed."
+        "Identity smoke: fresh install, upgrades through 0018, runtime roles, TEN-01 and sessions passed."
     )
 
 

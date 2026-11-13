@@ -2,9 +2,9 @@
 
 import os
 import sys
+from uuid import uuid4
 
 from psycopg import connect, errors
-
 
 PUBLIC_EXECUTE = (
     "EXISTS (SELECT FROM aclexplode(coalesce(p.proacl, acldefault('f',p.proowner))) a "
@@ -67,9 +67,9 @@ def inventory(database: str):
         return routines, relations, columns
 
 
-def denied(db, statement: str) -> None:
+def denied(db, statement: str, params=None) -> None:
     try:
-        db.execute(statement)
+        db.execute(statement, params)
     except errors.InsufficientPrivilege:
         print("Denied (42501):", statement)
     else:
@@ -100,19 +100,85 @@ def main() -> None:
                     "SELECT set_config('veriq.organization_id',%s,true),set_config('veriq.user_id',%s,true)",
                     (str(org), str(subject)),
                 )
-                assert api.execute(
-                    "UPDATE courses SET title='Audit SQL fixture' WHERE organization_id=%s AND id=%s RETURNING id",
-                    (org, item),
-                ).fetchone() == (item,)
+                denied(
+                    api,
+                    f"UPDATE courses SET title='Audit SQL fixture' WHERE organization_id='{org}' AND id='{item}'",
+                )
+            assert (
+                owner.execute("SELECT count(*) FROM academic_catalog_events").fetchone()
+                == before
+            )
+            for case in ("valid", "digest", "expired", "revoked", "foreign"):
+                sid, digest = uuid4(), uuid4().bytes + uuid4().bytes
+                owner.execute(
+                    """
+                    INSERT INTO auth_sessions(
+                        id,user_id,token_hash,organization_id,grant_epoch,mfa_level,
+                        authenticated_at,created_at,last_seen_at,idle_expires_at,absolute_expires_at,
+                        revoked_at,revoke_reason
+                    )
+                    SELECT %s,user_id,%s,organization_id,grant_epoch,1,
+                        now()-interval '10 minutes',now()-interval '10 minutes',
+                        now()-interval '10 minutes',
+                        now()+CASE WHEN %s='expired' THEN interval '-1 minute' ELSE interval '5 minutes' END,
+                        now()+interval '1 hour',
+                        CASE WHEN %s='revoked' THEN now() END,
+                        CASE WHEN %s='revoked' THEN 'logout' END
+                    FROM organization_memberships
+                    WHERE CASE WHEN %s='foreign' THEN organization_id<>%s
+                               ELSE organization_id=%s AND user_id=%s END
+                    LIMIT 1
+                """,
+                    (sid, digest, case, case, case, case, org, org, subject),
+                )
+                try:
+                    with api.transaction(force_rollback=True):
+                        api.execute(
+                            """
+                            SELECT set_config('veriq.organization_id',%s,true),
+                                   set_config('veriq.user_id',%s,true),
+                                   set_config('veriq.catalog_session_id',%s,true),
+                                   set_config('veriq.catalog_session_digest',%s,true)
+                        """,
+                            (
+                                str(org),
+                                str(subject),
+                                str(sid),
+                                digest.hex() if case != "digest" else "00" * 32,
+                            ),
+                        )
+                        update = "UPDATE courses SET title='Audit session fixture' WHERE id=%s AND organization_id=%s"
+                        if case == "valid":
+                            assert api.execute(update, (item, org)).rowcount == 1
+                        else:
+                            denied(api, update, (item, org))
+                finally:
+                    owner.execute("DELETE FROM auth_sessions WHERE id=%s", (sid,))
                 assert (
                     owner.execute(
                         "SELECT count(*) FROM academic_catalog_events"
                     ).fetchone()
                     == before
                 )
-                print(
-                    "AUDIT FINDING: direct API SQL with selected tenant identity can edit a course without an audit event"
-                )
+                print("Catalog session probe:", case)
+            denied(api, "INSERT INTO academic_catalog_events DEFAULT VALUES")
+
+            denied(api, "UPDATE academic_catalog_events SET action='edit' WHERE false")
+            for dbname in (clean, upgraded):
+                with connection(
+                    dbname, "veriq_dev", os.environ["VERIQ_DB_PASSWORD"]
+                ) as db:
+                    assert (
+                        db.execute("""
+                        SELECT rolcanlogin,rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolbypassrls
+                        FROM pg_roles WHERE rolname='veriq_catalog_auditor'
+                    """).fetchone()
+                        == (False,) * 6
+                    )
+                    assert db.execute("""
+                        SELECT count(*) FROM pg_auth_members
+                        WHERE member='veriq_catalog_auditor'::regrole
+                    """).fetchone() == (0,)
 
     for database in (clean, upgraded):
         for role, variable in (
