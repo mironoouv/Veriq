@@ -2,14 +2,17 @@
 
 import json
 import os
-import socket
+import secrets
 import subprocess
 import sys
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
+from hashlib import sha256
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
+from psycopg import connect, sql
 from veriq.mfa_crypto import FactorKeys, totp
 
 
@@ -42,8 +45,40 @@ def main():
             path.write_text(value)
             os.chown(path, 10002, 10002)
             path.chmod(0o600)
+        host = os.environ.get("VERIQ_TRUSTED_DB_HOST")
+        token = uuid4().hex + "." + secrets.token_urlsafe(32)
+        sid = token[:32]
+        if host:
+            password = os.urandom(32).hex()
+            path = root / "password"
+            path.write_text(password)
+            with connect(
+                host=host,
+                dbname="veriq",
+                user="veriq_dev",
+                password=os.environ["VERIQ_DB_PASSWORD"],
+            ) as db:
+                assert db.execute("SHOW server_version_num").fetchone() == ("170011",)
+                db.execute(
+                    sql.SQL("ALTER ROLE veriq_mfa_trusted LOGIN PASSWORD {}").format(
+                        sql.Literal(password)
+                    )
+                )
+                db.execute(
+                    "INSERT INTO users(id,email_normalized,password_hash) VALUES (%s,%s,'fixture')",
+                    (user, f"{user.hex}@example.invalid"),
+                )
+                db.execute(
+                    "INSERT INTO mfa_factors(user_id,id,key_id,ciphertext,confirmed_at,pending_until) VALUES (%s,%s,'fixture',%s,now(),now())",
+                    (user, factor, encrypted),
+                )
+                db.execute(
+                    """INSERT INTO auth_sessions(id,user_id,token_hash,mfa_level,authenticated_at,created_at,last_seen_at,idle_expires_at,absolute_expires_at)
+                    VALUES (%s,%s,%s,1,now(),now(),now(),now()+interval '20 minutes',now()+interval '1 hour')""",
+                    (sid, user, sha256(token.encode()).digest()),
+                )
         config = {
-            **os.environ,
+            **{k: v for k, v in os.environ.items() if k != "VERIQ_DB_PASSWORD"},
             "VERIQ_MFA_PEER_UID": "10001",
             "VERIQ_MFA_SOCKET": str(endpoint),
             "VERIQ_TRUSTED_KEYRING": str(root / "keys"),
@@ -112,12 +147,47 @@ with socket.socket(socket.AF_UNIX) as s:
                     for i in range(3)
                     if f"{i:06d}" not in {code, totp(seed, counter - 1)}
                 )
-                assert call(request("check_fixture_totp", {"code": wrong})) == {
-                    "matches": False
-                }
-                assert call(request("check_fixture_totp", {"code": code})) == {
-                    "matches": True
-                }
+                if host:
+                    args = {
+                        "account": str(user),
+                        "factor": str(factor),
+                        "session": sid,
+                        "organization": None,
+                        "token": token,
+                        "code": wrong,
+                    }
+                    assert call(request("attest_disable", args)) == {"error": "denied"}
+                    args["code"] = code
+                    assert call(
+                        request("attest_disable", {**args, "factor": str(uuid4())})
+                    ) == {"error": "denied"}
+                    with ThreadPoolExecutor(2) as pool:
+                        replies = list(
+                            pool.map(call, [request("attest_disable", args)] * 2)
+                        )
+                    proofs = [r["attestation"] for r in replies if "attestation" in r]
+                    assert len(proofs) == 1 and {"error": "denied"} in replies
+                    assert call(request("attest_disable", args)) == {"error": "denied"}
+                    assert call(request("check_fixture_totp", {"code": code})) == {
+                        "error": "denied"
+                    }
+                    with connect(
+                        host=host,
+                        dbname="veriq",
+                        user="veriq_dev",
+                        password=os.environ["VERIQ_DB_PASSWORD"],
+                    ) as db:
+                        assert db.execute(
+                            "SELECT user_id,factor_id,session_id,purpose FROM mfa_operation_attestations WHERE id=%s",
+                            (proofs[0],),
+                        ).fetchone() == (user, factor, UUID(sid), "factor_disable")
+                else:
+                    assert call(request("check_fixture_totp", {"code": wrong})) == {
+                        "matches": False
+                    }
+                    assert call(request("check_fixture_totp", {"code": code})) == {
+                        "matches": True
+                    }
             finally:
                 server.terminate()
                 stdout, stderr = server.communicate(timeout=6)

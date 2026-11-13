@@ -16,3 +16,20 @@ jobs:
           docker run --rm --network none --user 0 --entrypoint /app/.venv/bin/python \
             -v "$PWD/services/mfa-trusted/process_test.py:/app/process_test.py:ro" \
             veriq-mfa-trusted /app/process_test.py
+      - name: PostgreSQL-backed IPC
+        env:
+          COMPOSE_PROJECT_NAME: veriq-trusted-ipc-ci
+        run: |
+          for variable in VERIQ_DB_PASSWORD VERIQ_API_DB_PASSWORD VERIQ_WORKER_DB_PASSWORD; do
+            value="$(openssl rand -hex 32)"
+            echo "::add-mask::$value"
+            export "$variable=$value"
+          done
+          trap 'docker compose down --volumes' EXIT
+          docker compose up -d --wait postgres
+          docker compose run --build --rm -T migrate
+          docker run --rm --network veriq-trusted-ipc-ci_database --user 0 \
+            -e VERIQ_DB_PASSWORD -e VERIQ_TRUSTED_DB_HOST=postgres -e VERIQ_TRUSTED_DB_NAME=veriq \
+            --entrypoint /app/.venv/bin/python \
+            -v "$PWD/services/mfa-trusted/process_test.py:/app/process_test.py:ro" \
+            veriq-mfa-trusted /app/process_test.py
