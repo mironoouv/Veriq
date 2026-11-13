@@ -1,7 +1,7 @@
 # Известные ограничения
 
 - [PR #2](https://github.com/mironoouv/Veriq/pull/2). Worker рассчитан на короткую доверенную SQL-пробу. Lease и восстановление длительных задач описаны как предложение.
-- [PR #2](https://github.com/mironoouv/Veriq/pull/2). Сроки хранения и очистка `background_jobs` ждут согласования. Автоматической очистки нет.
+- Queue retention (0021): terminal jobs expire after 168 hours. UUID deduplication keys remain indefinitely. Monitor key growth and establish a separate policy before adding external handlers.
 - [PR #2](https://github.com/mironoouv/Veriq/pull/2). Starlette предупреждает об устаревающей интеграции `httpx` в тестах. Браузерный E2E запланирован отдельно.
 
 ## Public Auth — NOT READY

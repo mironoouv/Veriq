@@ -71,3 +71,19 @@ repeat across crashes and require receiver-side idempotency or fencing.
 SMTP and other existing queues retain their own delivery semantics.
 Drain old worker processes before applying 0020, then restart on the new
 code. Downgrade is refused because it would discard leases.
+
+## Queue history retention (0021)
+
+Each worker attempts one batch of up to 100 terminal rows per minute in a
+separate transaction with a two-second statement timeout. The cutoff is
+168 hours from finished_at, inclusive. A status-transition trigger stamps
+both explicit finish and recovery of exhausted attempts. Legacy terminal
+rows receive the migration timestamp because their original completion time
+was not recorded. Locked rows are skipped and reconsidered on later runs.
+
+The dedicated non-login purger can delete only through the fixed worker
+command. Cleanup logs count, duration and failure. Pending and running
+jobs and all security audit tables are outside the retention rule.
+UUID-only keys survive deletion to preserve enqueue idempotency and prevent
+reuse of fencing identities. Their storage grows with the number of distinct
+jobs. External handlers still need their own idempotency contracts.

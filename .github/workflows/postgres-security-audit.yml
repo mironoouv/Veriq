@@ -83,12 +83,24 @@ jobs:
           after="$(database -c 'SELECT id,kind,status,attempts,available_at FROM background_jobs ORDER BY id')"
           test "$before" = "$after"
           test "$(database -c 'SELECT count(*) FROM background_jobs WHERE lease_owner IS NULL AND lease_until IS NULL')" = 2
+          scratch alembic upgrade 0021
+          test "$before" = "$(database -c 'SELECT id,kind,status,attempts,available_at FROM background_jobs ORDER BY id')"
+          test "$(database -c 'SELECT count(*) FROM background_job_keys')" = 2
+          test "$(database -c "SELECT count(*) FROM background_jobs WHERE status='succeeded' AND finished_at IS NOT NULL")" = 1
       - name: Compare effective ACLs and exercise restricted logins
         run: |
           docker compose run --no-deps --rm -T migrate python - veriq audit_upgrade < tests/postgres_security_audit.py
       - name: Verify worker process crash recovery and fencing
         run: |
           docker compose run --no-deps --rm -T migrate python - < tests/worker_lease_process.py
+      - name: Test queue history retention
+        run: |
+          docker compose exec -T postgres createdb -U veriq_dev audit_history
+          scratch() {
+            docker compose run --no-deps --rm -T -e VERIQ_DB_NAME=audit_history migrate "$@"
+          }
+          scratch alembic upgrade 0021
+          scratch python - < tests/worker_history_cleanup.py
       - name: Stop isolated stack
         if: always()
         run: docker compose down --volumes
