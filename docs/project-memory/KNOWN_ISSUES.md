@@ -1,8 +1,8 @@
 # Известные ограничения
 
-- [PR #2](https://github.com/mironoouv/Veriq/pull/2). Worker рассчитан на короткую доверенную SQL-пробу. Lease и восстановление длительных задач описаны как предложение.
-- [PR #2](https://github.com/mironoouv/Veriq/pull/2). Сроки хранения и очистка `background_jobs` ждут согласования. Автоматической очистки нет.
-- [PR #2](https://github.com/mironoouv/Veriq/pull/2). Starlette предупреждает об устаревающей интеграции `httpx` в тестах. Браузерный E2E запланирован отдельно.
+- Durable lease, heartbeat, fencing and recovery are implemented in 0020 for short SQL handlers. External side effects can repeat. Connection loss during heartbeat and shutdown during active work still need broader fault testing.
+- Queue retention (0021): terminal jobs expire after 168 hours. UUID deduplication keys remain indefinitely. Monitor key growth before adding external handlers.
+- Starlette/httpx compatibility remains tracked. Browser E2E already runs in CI.
 
 ## Public Auth — NOT READY
 

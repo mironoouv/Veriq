@@ -13,7 +13,7 @@ from uuid import UUID, uuid4
 
 from cryptography.fernet import Fernet
 from redis.exceptions import RedisError
-from sqlalchemy import text
+from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from veriq.database import create_database_engine
@@ -30,6 +30,27 @@ from veriq.verification_mail import (
 
 HEARTBEAT = Path("/tmp/veriq-worker-heartbeat")
 LOG = logging.getLogger(__name__)
+
+
+def purge_queue_history(engine: Engine) -> None:
+    started = monotonic()
+    try:
+        with engine.begin() as connection:
+            connection.exec_driver_sql("SET LOCAL statement_timeout='2s'")
+            deleted = connection.execute(
+                text("SELECT public.veriq_queue_purge()")
+            ).scalar_one()
+    except SQLAlchemyError:
+        LOG.warning(
+            "queue_history_purge outcome=error duration_ms=%d",
+            (monotonic() - started) * 1000,
+        )
+    else:
+        LOG.info(
+            "queue_history_purge outcome=ok deleted=%d duration_ms=%d",
+            deleted,
+            (monotonic() - started) * 1000,
+        )
 
 
 async def main() -> int:
@@ -73,6 +94,7 @@ async def main() -> int:
         HEARTBEAT.unlink(missing_ok=True)
         owner = uuid4()
         purge_after = monotonic()
+        queue_purge_after = monotonic()
         while not stopped.is_set():
             try:
                 processed = process_next(engine, owner=owner)
@@ -87,6 +109,9 @@ async def main() -> int:
                     )
                 if security_mail and mailbox is not None:
                     processed = deliver_password_notice(engine, mailbox) or processed
+                if monotonic() >= queue_purge_after:
+                    purge_queue_history(engine)
+                    queue_purge_after = monotonic() + 60
                 HEARTBEAT.touch()
             except SQLAlchemyError:
                 LOG.warning("Background database operation unavailable")
