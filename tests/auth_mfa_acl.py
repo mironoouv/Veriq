@@ -91,6 +91,36 @@ def recovery_trigger(database):
         ), row
 
 
+def authority_revocation(database):
+    org, role = uuid4(), uuid4()
+    with open_db(database) as owner, owner.transaction(force_rollback=True):
+        owner.execute(
+            "INSERT INTO organizations(id,slug,display_name,timezone,status) VALUES (%s,%s,'Fixture','UTC','active')",
+            (org, org.hex),
+        )
+        owner.execute(
+            "INSERT INTO organization_roles VALUES (%s,%s,'org_admin')", (org, role)
+        )
+        permission = owner.execute(
+            "SELECT code FROM permissions WHERE code LIKE '%recovery%' AND scope='organization' LIMIT 1"
+        ).fetchone()[0]
+        owner.execute(
+            "INSERT INTO organization_role_permissions VALUES (%s,%s,%s)",
+            (org, role, permission),
+        )
+        revision = "SELECT revision FROM mfa_recovery_authority WHERE id"
+        before = owner.execute(revision).fetchone()[0]
+        assert (
+            owner.execute(
+                "DELETE FROM organization_role_permissions WHERE organization_id=%s AND role_id=%s AND permission_code=%s",
+                (org, role, permission),
+            ).rowcount
+            == 1
+        )
+        assert owner.execute(revision).fetchone() == (before + 1,)
+    print(f"{database}: revoking a recovery grant advances the authority revision")
+
+
 def factor_acl(database):
     with open_db(database, "veriq_mfa_verifier") as db:
         assert db.execute("SELECT session_user,current_user").fetchone() == (
@@ -160,5 +190,6 @@ if __name__ == "__main__":
     for database in sys.argv[1:]:
         check(database, FUNCTIONS, invokers=INVOKERS)
         recovery_trigger(database)
+        authority_revocation(database)
         factor_acl(database)
         factor_dml(database)
