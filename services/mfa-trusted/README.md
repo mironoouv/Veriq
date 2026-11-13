@@ -26,3 +26,25 @@ must verify the process is gone before removing a stale socket. This
 fixture transport has no replay ledger and must remain disconnected
 from user-facing Auth. Trusted SQL authorization, proofs and atomic
 cutover belong to later stages.
+
+## PostgreSQL stage (0022)
+
+The disabled-by-default veriq_mfa_trusted login may execute only the staged
+factor-disable attestation and consumption entry points. The session-store
+role owns both routines. It checks the live session, factor identity,
+account-wide disable policy, credential version and recovery authority
+revision. The 30-second attestation is single-use. Consumption, factor
+deletion, session revocation and audit commit together.
+
+Only the trusted process may attest after independently verifying TOTP.
+PostgreSQL does not verify TOTP in this slice. Do not provision this login
+outside isolated tests until that process and its authorization are wired.
+Enrollment and recovery are deliberately outside these entry points.
+Cutover requires wiring those paths, then revoking legacy grants and
+removing the legacy keyring mount in the same maintenance transition.
+The legacy path still works, so SEC-MFA-01 remains open.
+
+PostgreSQL does not validate TOTP. The right to call attest is reserved
+for the trusted process after it independently verifies the cryptographic
+proof. Keep the login disabled outside disposable tests until integration
+and atomic legacy cutover. The current IPC fixture does not call SQL.
