@@ -214,7 +214,12 @@ test("serves the app while API is stopped and recovers on retry", async ({
 });
 
 test("keeps test Auth endpoints disabled in production", async ({ page }) => {
-  for (const route of ["/auth/csrf", "/me", "/auth/verify-email"]) {
+  for (const route of [
+    "/auth/csrf",
+    "/me",
+    "/auth/verify-email",
+    "/organizations/00000000-0000-4000-8000-000000000001/academic/courses",
+  ]) {
     expect((await page.request.get("/api/v1" + route)).status()).toBe(404);
   }
   for (const route of [

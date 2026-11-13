@@ -11,6 +11,7 @@ TENANT_CHECKS = Path(__file__).with_name("tenant_checks.py")
 REGISTRATION_CHECKS = Path(__file__).with_name("registration_checks.py")
 AUTH_RATE_CHECKS = Path(__file__).with_name("auth_rate_checks.py")
 MFA_RECOVERY_CHECKS = Path(__file__).with_name("mfa_recovery_checks.py")
+CATALOG_CHECKS = Path(__file__).with_name("academic_catalog_checks.py")
 IMPORT_CHECKS = Path(__file__).with_name("bulk_import_checks.py")
 JOINING_CHECKS = Path(__file__).with_name("organization_joining_checks.py")
 PASSWORD_CHECKS = Path(__file__).with_name("password_recovery_checks.py")
@@ -197,8 +198,50 @@ def main() -> None:
         scratch(import_db, "python", "-", stdin=import_checks)
     finally:
         database(f"DROP DATABASE {import_db}")
+    catalog_db = f"catalog_test_{uuid4().hex}"
+    catalog_checks = CATALOG_CHECKS.read_text(encoding="utf-8")
+    database(f"CREATE DATABASE {catalog_db}")
+    try:
+        scratch(catalog_db, "alembic", "upgrade", "0015")
+        scratch(catalog_db, "python", "-", "seed", stdin=catalog_checks)
+        scratch(catalog_db, "alembic", "upgrade", "head")
+        scratch(catalog_db, "alembic", "current", "--check-heads")
+        scratch(catalog_db, "alembic", "downgrade", "0016")
+        scratch(catalog_db, "alembic", "upgrade", "0017")
+        scratch(catalog_db, "python", "-", stdin=catalog_checks)
+        result = subprocess.run(
+            [
+                *COMPOSE,
+                "run",
+                "--no-deps",
+                "--rm",
+                "-T",
+                "-e",
+                f"VERIQ_DB_NAME={catalog_db}",
+                "migrate",
+                "alembic",
+                "downgrade",
+                "0016",
+            ],
+            check=False,
+            capture_output=True,
+            encoding="utf-8",
+            timeout=120,
+        )
+        assert result.returncode != 0
+        assert (
+            "Cannot downgrade 0017: restore audit history must be preserved"
+            in result.stderr
+        )
+        scratch(catalog_db, "alembic", "current", "--check-heads")
+        scratch(catalog_db, "python", "-", "after-downgrade", stdin=catalog_checks)
+        print(
+            "0017 downgrade succeeded before restore and refused afterward without losing audit."
+        )
+    finally:
+        database(f"DROP DATABASE {catalog_db}")
     print(
-        "Identity smoke: fresh install, upgrades through 0015, runtime roles, TEN-01 and sessions passed."
+        "Identity smoke: fresh install, upgrades through 0017, runtime roles, TEN-01 and sessions passed."
     )
 
 

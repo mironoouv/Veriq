@@ -156,3 +156,27 @@ input value. Confirmed reports omit emails. Only a verified user's successful
 claim creates a pending membership and exposes its request ID to the batch
 owner. A different or repeated upload never creates a membership. Invalid
 email, unexpected columns and in-file duplicates have row-level codes.
+
+## Academic Slice 1 (test HTTPS)
+
+GET and POST /organizations/{organization_id}/academic/{kind} list and create
+catalog records. Kind is courses or study_groups. GET and PATCH on the path
+with /{id} read and edit a record. POST /{id}/archive archives it.
+
+List accepts archived, query and page, returning items and total with 20 items
+per page. Creation accepts title and optional description, with a UUID
+Idempotency-Key. Reusing that key with a different body returns 409. PATCH
+accepts title, optional description and the last version. Archive accepts the
+last version and repeated archive returns the archived record. Responses omit
+the internal creation digest. Out-of-scope records and denied requests return
+404. Mutation requests use existing browser cookie, Origin and CSRF checks.
+
+Catalog permission codes are academic.catalog.read, academic.catalog.manage
+and academic.catalog.archive. Session tenant must match the URL. The explicit
+academic test overlay enables endpoints under the existing test Auth gate.
+
+POST /{id}/restore accepts the archived record version and requires read,
+archive and manage permissions. The response preserves the ID and advances
+the version. A stale version or an already active record returns 409 and
+does not append an audit event. Unknown or out-of-scope IDs return 404.
+Archived lists include can_restore for rendering the action.

@@ -1,0 +1,5 @@
+# Use with the loopback HTTPS login overlay.
+services:
+  api:
+    environment:
+      VERIQ_ENABLE_TEST_ACADEMIC_CATALOG: "1"

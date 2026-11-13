@@ -227,10 +227,17 @@ class Sessions:
         return count
 
     @contextmanager
-    def tenant(self, token: SessionToken) -> Iterator[TenantAccess]:
+    def tenant(
+        self, token: SessionToken, *, lock_authority: bool = False
+    ) -> Iterator[TenantAccess]:
         """Authorize only the tenant selected on the authenticated session."""
         gate = token._gate(self.policy)
         with self._transaction() as connection:
+            if lock_authority:
+                # Acquire the authority guard before taking the session row lock.
+                connection.execute(
+                    text("SELECT pg_advisory_xact_lock_shared(670013::bigint)")
+                )
             identity = self._use(connection, gate)
             if identity.organization_id is None:
                 raise AccessDenied
