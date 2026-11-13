@@ -76,6 +76,62 @@ def denied(db, statement: str, params=None) -> None:
         raise AssertionError(f"Expected permission denial: {statement}")
 
 
+def queue_leases(db, database, password):
+    job, first, second = uuid4(), uuid4(), uuid4()
+    claim = "SELECT * FROM public.veriq_queue_claim(%s)"
+    heartbeat = "SELECT public.veriq_queue_heartbeat(%s,%s,%s)"
+    finish = "SELECT public.veriq_queue_finish(%s,%s,%s,%s)"
+    db.execute("SELECT public.veriq_queue_enqueue(%s)", (job,))
+    db.execute("SELECT public.veriq_queue_enqueue(%s)", (job,))
+    with connection(database, "veriq_worker", password) as crashed:
+        assert crashed.execute(claim, (first,)).fetchone() == (job, "probe", 1)
+    with connection(database, "veriq_worker", password) as other:
+        assert other.execute(claim, (second,)).fetchone() is None
+        assert other.execute(heartbeat, (job, second, 1)).fetchone() == (False,)
+        assert other.execute(finish, (job, second, 1, True)).fetchone() == (False,)
+    with connection(database, "veriq_dev", os.environ["VERIQ_DB_PASSWORD"]) as owner:
+        expiry = "SELECT lease_until FROM background_jobs WHERE id=%s"
+        before = owner.execute(expiry, (job,)).fetchone()[0]
+        assert db.execute(heartbeat, (job, first, 1)).fetchone() == (True,)
+        assert owner.execute(expiry, (job,)).fetchone()[0] > before
+        owner.execute(
+            "UPDATE background_jobs SET lease_until=clock_timestamp()-interval '5 seconds' WHERE id=%s",
+            (job,),
+        )
+        assert db.execute(heartbeat, (job, first, 1)).fetchone() == (False,)
+        assert db.execute(claim, (second,)).fetchone() == (job, "probe", 2)
+        assert db.execute(finish, (job, first, 1, True)).fetchone() == (False,)
+        assert db.execute(heartbeat, (job, second, 1)).fetchone() == (False,)
+        assert db.execute(finish, (job, second, 2, False)).fetchone() == (True,)
+        assert db.execute(claim, (first,)).fetchone() is None
+        owner.execute(
+            "UPDATE background_jobs SET available_at=clock_timestamp() WHERE id=%s",
+            (job,),
+        )
+        assert db.execute(claim, (first,)).fetchone() == (job, "probe", 3)
+        assert db.execute(finish, (job, first, 3, True)).fetchone() == (True,)
+        assert db.execute(finish, (job, first, 3, False)).fetchone() == (False,)
+        assert db.execute(claim, (second,)).fetchone() is None
+        assert owner.execute(
+            "SELECT status,attempts FROM background_jobs WHERE id=%s", (job,)
+        ).fetchone() == ("succeeded", 3)
+        exhausted = uuid4()
+        db.execute("SELECT public.veriq_queue_enqueue(%s)", (exhausted,))
+        for token in range(1, 4):
+            assert db.execute(claim, (first,)).fetchone() == (exhausted, "probe", token)
+            owner.execute(
+                "UPDATE background_jobs SET lease_until=clock_timestamp()-interval '10 seconds' WHERE id=%s",
+                (exhausted,),
+            )
+        assert db.execute(claim, (second,)).fetchone() is None
+        assert owner.execute(
+            "SELECT status,attempts FROM background_jobs WHERE id=%s", (exhausted,)
+        ).fetchone() == ("failed", 3)
+    print(
+        "Durable queue: committed claim, heartbeat, expiry, fencing, backoff and immutable success passed"
+    )
+
+
 def main() -> None:
     clean, upgraded = sys.argv[1:]
     assert inventory(clean) == inventory(upgraded)
@@ -197,7 +253,9 @@ def main() -> None:
                 denied(db, "SELECT * FROM auth_sessions")
                 denied(db, "DELETE FROM academic_catalog_events WHERE false")
                 if role == "veriq_api":
-                    denied(db, "SELECT * FROM public.veriq_queue_claim()")
+                    denied(
+                        db, "SELECT * FROM public.veriq_queue_claim(gen_random_uuid())"
+                    )
                     denied(db, "SELECT public.veriq_import_purge()")
                     assert db.execute("SELECT count(*) FROM courses").fetchone() == (0,)
                     assert db.execute(
@@ -231,43 +289,7 @@ def main() -> None:
                         "UPDATE background_jobs SET kind='probe',status='pending',attempts=0,available_at=now()",
                     )
                     denied(db, "DELETE FROM background_jobs WHERE false")
-                    job = uuid4()
-                    db.execute("SELECT public.veriq_queue_enqueue(%s)", (job,))
-                    db.execute("SELECT public.veriq_queue_enqueue(%s)", (job,))
-                    with db.transaction(force_rollback=True):
-                        assert db.execute(
-                            "SELECT * FROM public.veriq_queue_claim()"
-                        ).fetchone() == (job, "probe", 0)
-                        with connection(database, role, os.environ[variable]) as other:
-                            assert (
-                                other.execute(
-                                    "SELECT * FROM public.veriq_queue_claim()"
-                                ).fetchone()
-                                is None
-                            )
-                            other.execute("SET lock_timeout='1s'")
-                            assert other.execute(
-                                "SELECT public.veriq_queue_finish(%s,true)", (job,)
-                            ).fetchone() == (False,)
-                    with db.transaction():
-                        assert db.execute(
-                            "SELECT * FROM public.veriq_queue_claim()"
-                        ).fetchone() == (job, "probe", 0)
-                        assert db.execute(
-                            "SELECT public.veriq_queue_finish(%s,true)", (job,)
-                        ).fetchone() == (True,)
-                        assert db.execute(
-                            "SELECT public.veriq_queue_finish(%s,false)", (job,)
-                        ).fetchone() == (False,)
-                    assert (
-                        db.execute(
-                            "SELECT * FROM public.veriq_queue_claim()"
-                        ).fetchone()
-                        is None
-                    )
-                    print(
-                        "Worker queue: concurrent claim isolated, rollback redelivered, completion immutable"
-                    )
+                    queue_leases(db, database, os.environ[variable])
 
 
 if __name__ == "__main__":

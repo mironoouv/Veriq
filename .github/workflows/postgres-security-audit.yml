@@ -67,7 +67,7 @@ jobs:
           scratch python -c 'import runpy,sys; sys.path.insert(0,"/fixtures"); runpy.run_module("catalog_audit_upgrade",run_name="__main__")'
           snapshot > "$fixtures/final.jsonl"
           test "$(wc -l < "$fixtures/final.jsonl")" -eq 40
-      - name: Preserve queued jobs from 0018 to 0019
+      - name: Preserve queued jobs from 0019 to 0020
         run: |
           docker compose exec -T postgres createdb -U veriq_dev audit_queue_upgrade
           scratch() {
@@ -76,16 +76,19 @@ jobs:
           database() {
             docker compose exec -T postgres psql -XAt -v ON_ERROR_STOP=1 -U veriq_dev -d audit_queue_upgrade "$@"
           }
-          scratch alembic upgrade 0018
+          scratch alembic upgrade 0019
           database -c "INSERT INTO background_jobs(id,kind,status,attempts) VALUES (gen_random_uuid(),'probe','pending',1),(gen_random_uuid(),'probe','succeeded',2)"
           before="$(database -c 'SELECT id,kind,status,attempts,available_at FROM background_jobs ORDER BY id')"
-          scratch alembic upgrade 0019
+          scratch alembic upgrade 0020
           after="$(database -c 'SELECT id,kind,status,attempts,available_at FROM background_jobs ORDER BY id')"
           test "$before" = "$after"
-          test "$(database -c 'SELECT count(*) FROM background_jobs WHERE claim_xid IS NULL')" = 2
+          test "$(database -c 'SELECT count(*) FROM background_jobs WHERE lease_owner IS NULL AND lease_until IS NULL')" = 2
       - name: Compare effective ACLs and exercise restricted logins
         run: |
           docker compose run --no-deps --rm -T migrate python - veriq audit_upgrade < tests/postgres_security_audit.py
+      - name: Verify worker process crash recovery and fencing
+        run: |
+          docker compose run --no-deps --rm -T migrate python - < tests/worker_lease_process.py
       - name: Stop isolated stack
         if: always()
         run: docker compose down --volumes

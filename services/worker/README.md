@@ -6,41 +6,6 @@ Foundation 1b запускает отдельный процесс из того
 ограниченную очередь сигналов пробуждения. При потере Redis worker опрашивает
 PostgreSQL и автоматически восстанавливает работу с Redis. Redis не публикует порт.
 
-Worker резервирует задачи через `FOR UPDATE SKIP LOCKED`, выполняет SQL-обработчик
-и фиксирует его результат в одной транзакции. Повторная постановка с тем же UUID
-безопасна. При ошибке обработчик откатывается до savepoint. До трёх попыток
-выполняются с интервалами 2 и 4 секунды. PostgreSQL ограничивает каждый SQL-запрос
-тремя секундами. При гибели процесса незавершённая транзакция откатывается и
-задача снова доступна. Сбой Redis не отменяет уже зафиксированную постановку.
-Readiness API возвращает 503 при потере Redis, liveness остаётся доступной.
-
-## Контракт обработчиков 1b
-
-Транзакция и блокировка строки удерживаются всё время выполнения обработчика.
-В 1b разрешены только короткие доверенные SQL-операции в той же транзакции.
-Трёхсекундный лимит действует на отдельный SQL-запрос. Обработчик обязан
-завершиться за одну короткую транзакцию и не должен делать сетевые вызовы,
-внешние записи или запускать длительные и недоверенные задачи. Code/SQL учащихся
-предназначены для изолированного Judge. SQL-ошибка вызывает откат до savepoint
-и повтор, неизвестный тип задачи переводится в `failed`. Ошибки в коде
-обработчика должны проявляться как сбой процесса и устраняться при ревью.
-
-SIGTERM прекращает выбор новых задач после текущей короткой операции.
-Worker удаляет heartbeat и закрывает клиенты. Compose даёт 30 секунд
-на выход. При принудительной остановке PostgreSQL откатывает незавершённую
-транзакцию и следующему worker снова доступна та же задача.
-
-## Lease и восстановление — PROPOSED
-
-Перед добавлением длительных обработчиков резервировать задачу короткой
-транзакцией и сохранять `worker_id`, `locked_until` и номер выдачи lease.
-После фиксации выполнять работу вне транзакции с собственным дедлайном.
-Продлевать lease и завершать задачу условной записью по владельцу и номеру
-выдачи. Просроченную выдачу повторно поставить либо завершить ошибкой при
-исчерпании бюджета. Внешние операции требуют ключа идемпотентности, стабильного
-при повторной доставке, и проверки результата у провайдера после неоднозначного
-ответа. Механизм ожидает согласования и отдельной реализации.
-
 ## Хранение и очистка — PROPOSED
 
 Готовая к выборке задача и задача с отложенным повтором хранятся как `pending`
@@ -70,7 +35,7 @@ Worker удаляет heartbeat и закрывает клиенты. Compose д
 до проверки содержимого и согласования удаления. Для обычного прогона
 глобальная очистка Docker не требуется.
 
-## SEC-WRK-01: transaction-bound queue access
+## Historical queue contract (0019)
 
 Revision 0019 replaces worker table access with enqueue, claim and finish
 functions. Enqueue only creates probe jobs. Claim locks an available row
@@ -84,3 +49,25 @@ finish that claim. Rollback releases the row for redelivery. There is no
 durable worker identity, lease or fencing for external side effects. A
 committed unfinished claim can be reclaimed by a later transaction.
 Use a forward migration for recovery; downgrade would restore broad DML.
+
+## Current queue contract (0020)
+
+Claim commits a running row with a 12-second lease. The worker renews it
+every 3 seconds using another connection, leaving room for the 3-second
+SQL statement timeout and transient scheduling delays. PostgreSQL owns
+the expiry clock. Redis only wakes polling workers.
+
+Each claim consumes one of three attempts and uses that number as a
+per-job fencing token. Job UUIDs remain stable and must not be reused.
+A failed handler retries after 2 or 4 seconds. After a crash, expiry plus
+the same backoff makes the job eligible again. A poll finalizes an expired
+third attempt as failed. Success is terminal. A worker that loses its
+lease cannot commit handler SQL: finish and handler effects share a
+transaction, and the current bounded SQL statement can finish before rollback.
+
+Delivery is at least once. The worker UUID identifies a process
+incarnation, not a separate database principal. External effects can
+repeat across crashes and require receiver-side idempotency or fencing.
+SMTP and other existing queues retain their own delivery semantics.
+Drain old worker processes before applying 0020, then restart on the new
+code. Downgrade is refused because it would discard leases.
