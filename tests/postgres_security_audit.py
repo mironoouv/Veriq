@@ -5,7 +5,6 @@ import sys
 
 from psycopg import connect, errors
 
-
 PUBLIC_EXECUTE = (
     "EXISTS (SELECT FROM aclexplode(coalesce(p.proacl, acldefault('f',p.proowner))) a "
     "WHERE a.grantee=0 AND a.privilege_type='EXECUTE')"
@@ -100,19 +99,15 @@ def main() -> None:
                     "SELECT set_config('veriq.organization_id',%s,true),set_config('veriq.user_id',%s,true)",
                     (str(org), str(subject)),
                 )
-                assert api.execute(
-                    "UPDATE courses SET title='Audit SQL fixture' WHERE organization_id=%s AND id=%s RETURNING id",
-                    (org, item),
-                ).fetchone() == (item,)
-                assert (
-                    owner.execute(
-                        "SELECT count(*) FROM academic_catalog_events"
-                    ).fetchone()
-                    == before
+                denied(
+                    api,
+                    f"UPDATE courses SET title='Audit SQL fixture' WHERE organization_id='{org}' AND id='{item}'",
                 )
-                print(
-                    "AUDIT FINDING: direct API SQL with selected tenant identity can edit a course without an audit event"
-                )
+            assert (
+                owner.execute("SELECT count(*) FROM academic_catalog_events").fetchone()
+                == before
+            )
+            denied(api, "INSERT INTO academic_catalog_events DEFAULT VALUES")
 
     for database in (clean, upgraded):
         for role, variable in (

@@ -313,3 +313,20 @@ The migration locks the catalog and audit tables and checks history before
 changing policies or constraints. If a restore event exists, use a forward
 migration for compatibility changes. The rejected downgrade preserves the
 revision, policies and audit history.
+
+## Mandatory catalog audit (0018)
+
+Every inserted or updated catalog row writes an audit event in the same
+database transaction. Existing RLS still checks organization and grants.
+The trigger also checks the stored session against the supplied session
+proof, actor and row organization. Its long internal interval arguments
+leave the stored idle and absolute expiry timestamps authoritative. The
+HTTP service continues to apply its configured session policy.
+
+The trigger runs as a non-login role with INSERT on the audit table and
+EXECUTE on the existing session validator. API loses direct audit INSERT.
+The request ID is correlation metadata and is not proof of identity.
+Session digests must be handled like credentials. A caller holding a
+current session proof can act within that session's permissions. This
+migration does not change the trust model for direct catalog reads.
+Downgrade is refused because it would remove mandatory audit.

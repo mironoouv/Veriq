@@ -145,6 +145,21 @@ class AcademicCatalog:
             access.require(ResourcePolicy("academic.catalog.read"), resource)
             access.require(ResourcePolicy("academic.catalog.manage"), resource)
             connection = access.connection
+            gate = access.session_gate
+            if gate is None:
+                raise AccessDenied
+            connection.execute(
+                text("""
+                    SELECT set_config('veriq.catalog_session_id',:session,true),
+                           set_config('veriq.catalog_session_digest',:digest,true),
+                           set_config('veriq.catalog_request_id',:request,true)
+                """),
+                {
+                    "session": str(gate.session_id),
+                    "digest": gate.digest.hex(),
+                    "request": str(request_id),
+                },
+            )
             params: dict[str, object] = {"org": org, "item": item}
             if isinstance(data, CatalogArchive):
                 restoring = isinstance(data, CatalogRestore)
@@ -221,18 +236,4 @@ class AcademicCatalog:
                 ):
                     return CatalogRow.model_validate(dict(existing))
                 raise CatalogConflict
-            connection.execute(
-                text("""
-                INSERT INTO public.academic_catalog_events(organization_id,actor_id,course_id,group_id,action,request_id)
-                VALUES (:org,:actor,:course,:group,:action,:request)
-            """),
-                {
-                    "org": org,
-                    "actor": access.subject.user_id,
-                    "course": item if kind == CatalogKind.COURSES else None,
-                    "group": item if kind == CatalogKind.GROUPS else None,
-                    "action": action,
-                    "request": request_id,
-                },
-            )
             return CatalogRow.model_validate(dict(row))

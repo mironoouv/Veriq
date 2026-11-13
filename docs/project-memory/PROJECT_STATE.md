@@ -51,3 +51,5 @@
 - Slice 1 в ветке `feature/academic-01-catalog`: ревизия `0016`, изолированный каталог courses и study_groups, архив и тестовый HTTPS API/Vue. Slice 2 ждёт ревью. Public Auth остаётся NOT READY.
 
 - PR #21 returned for changes after independent review. Revision 0017 adds catalog restoration, with a version check and an audit event. Acceptance awaits repeat independent review.
+
+- SEC-ACA-01 is under review: revision 0018 requires a current session proof for catalog DML and records audit in the database transaction. Direct SQL read isolation remains a separate audit topic.
