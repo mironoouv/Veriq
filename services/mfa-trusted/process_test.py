@@ -13,6 +13,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from psycopg import connect, sql
+from psycopg.errors import InsufficientPrivilege
 from veriq.mfa_crypto import FactorKeys, totp
 
 
@@ -76,6 +77,27 @@ def main():
                     """INSERT INTO auth_sessions(id,user_id,token_hash,mfa_level,authenticated_at,created_at,last_seen_at,idle_expires_at,absolute_expires_at)
                     VALUES (%s,%s,%s,1,now(),now(),now(),now()+interval '20 minutes',now()+interval '1 hour')""",
                     (sid, user, sha256(token.encode()).digest()),
+                )
+            with connect(
+                host=host, dbname="veriq", user="veriq_mfa_trusted", password=password
+            ) as db:
+                scope = (user, factor, sid, sha256(token.encode()).digest(), None)
+                proof = uuid4()
+                assert db.execute(
+                    "SELECT public.veriq_trusted_mfa_attest(%s,%s,%s,%s,%s,%s)",
+                    (proof, *scope),
+                ).fetchone() == (True,)
+                db.rollback()
+                try:
+                    db.execute("UPDATE mfa_factors SET last_counter=0 WHERE false")
+                except InsufficientPrivilege:
+                    db.rollback()
+                else:
+                    raise AssertionError(
+                        "Trusted login unexpectedly has direct factor DML"
+                    )
+                print(
+                    "Trust boundary: SQL attestation requires trusted credentials and a current session proof"
                 )
         config = {
             **{k: v for k, v in os.environ.items() if k != "VERIQ_DB_PASSWORD"},
