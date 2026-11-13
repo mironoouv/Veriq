@@ -320,7 +320,13 @@ with socket.socket(socket.AF_UNIX) as s:
                     assert call(
                         request("attest_disable", {**args, "session": str(uuid4())})
                     ) == {"error": "denied"}
-                    with admin() as db:
+                    with connect(
+                        host=host,
+                        dbname="postgres",
+                        user="veriq_dev",
+                        password=os.environ["VERIQ_DB_PASSWORD"],
+                        autocommit=True,
+                    ) as db:
                         db.execute("ALTER DATABASE veriq ALLOW_CONNECTIONS false")
                     assert call(request("health", {})) == {"error": "denied"}
                     assert call(request("attest_disable", args)) == {"error": "denied"}
