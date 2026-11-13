@@ -206,7 +206,8 @@ def run(owner: Engine, api: Engine) -> None:
             ).scalar_one()
             == 2
         )
-    for kind in CatalogKind:
+
+    def check_restore(kind: CatalogKind) -> None:
         restored_id = uuid4()
         original = catalog.write(actor, ORG, kind, restored_id, entry, uuid4())
         archived = catalog.write(
@@ -217,6 +218,35 @@ def run(owner: Engine, api: Engine) -> None:
             CatalogArchive(version=original.version),
             uuid4(),
         )
+
+        with owner.begin() as conn:
+            conn.execute(
+                text(
+                    "ALTER TABLE public.academic_catalog_events ADD CONSTRAINT test_reject_restore "
+                    "CHECK (action <> 'restore') NOT VALID"
+                )
+            )
+        try:
+            catalog.write(
+                actor,
+                ORG,
+                kind,
+                restored_id,
+                CatalogRestore(version=archived.version),
+                uuid4(),
+            )
+        except DBAPIError as exc:
+            assert exc.orig.sqlstate == "23514"
+        else:
+            raise AssertionError("Restore committed despite audit failure")
+        finally:
+            with owner.begin() as conn:
+                conn.execute(
+                    text(
+                        "ALTER TABLE public.academic_catalog_events DROP CONSTRAINT test_reject_restore"
+                    )
+                )
+        assert catalog.read(actor, ORG, kind, restored_id, True, "", 1) == archived
 
         def restore(_: int) -> str:
             try:
@@ -237,6 +267,27 @@ def run(owner: Engine, api: Engine) -> None:
         with ThreadPoolExecutor(max_workers=2) as pool:
             assert sorted(pool.map(restore, range(2))) == ["conflict", "restored"]
 
+        def transition(command: CatalogArchive) -> str:
+            try:
+                return catalog.write(
+                    actor, ORG, kind, restored_id, command, uuid4()
+                ).status
+            except CatalogConflict:
+                return "conflict"
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            archive_again = pool.submit(
+                transition, CatalogArchive(version=archived.version + 1)
+            )
+            stale_restore = pool.submit(
+                transition, CatalogRestore(version=archived.version)
+            )
+            assert archive_again.result() == "archived"
+            assert stale_restore.result() == "conflict"
+        current = catalog.read(actor, ORG, kind, restored_id, True, "", 1)
+        assert current.status == "archived" and current.version == archived.version + 2
+        assert transition(CatalogArchive(version=archived.version + 1)) == "archived"
+
         with owner.begin() as conn:
             actions = (
                 conn.execute(
@@ -249,7 +300,10 @@ def run(owner: Engine, api: Engine) -> None:
                 .scalars()
                 .all()
             )
-            assert sorted(actions) == ["archive", "create", "restore"]
+            assert sorted(actions) == ["archive", "archive", "create", "restore"]
+
+    for kind in CatalogKind:
+        check_restore(kind)
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         with owner.begin() as conn:
@@ -298,5 +352,23 @@ if __name__ == "__main__":
     owner = create_database_engine()
     if sys.argv[1:] == ["seed"]:
         seed(owner)
+    elif sys.argv[1:] == ["after-downgrade"]:
+        with owner.connect() as conn:
+            assert (
+                conn.execute(
+                    text(
+                        "SELECT count(*) FROM public.academic_catalog_events WHERE action='restore'"
+                    )
+                ).scalar_one()
+                == 2
+            )
+            assert (
+                conn.execute(
+                    text(
+                        "SELECT count(*) FROM pg_policies WHERE policyname='catalog_restore'"
+                    )
+                ).scalar_one()
+                == 2
+            )
     else:
         run(owner, role("veriq_api"))

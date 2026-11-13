@@ -206,7 +206,38 @@ def main() -> None:
         scratch(catalog_db, "python", "-", "seed", stdin=catalog_checks)
         scratch(catalog_db, "alembic", "upgrade", "head")
         scratch(catalog_db, "alembic", "current", "--check-heads")
+        scratch(catalog_db, "alembic", "downgrade", "0016")
+        scratch(catalog_db, "alembic", "upgrade", "0017")
         scratch(catalog_db, "python", "-", stdin=catalog_checks)
+        result = subprocess.run(
+            [
+                *COMPOSE,
+                "run",
+                "--no-deps",
+                "--rm",
+                "-T",
+                "-e",
+                f"VERIQ_DB_NAME={catalog_db}",
+                "migrate",
+                "alembic",
+                "downgrade",
+                "0016",
+            ],
+            check=False,
+            capture_output=True,
+            encoding="utf-8",
+            timeout=120,
+        )
+        assert result.returncode != 0
+        assert (
+            "Cannot downgrade 0017: restore audit history must be preserved"
+            in result.stderr
+        )
+        scratch(catalog_db, "alembic", "current", "--check-heads")
+        scratch(catalog_db, "python", "-", "after-downgrade", stdin=catalog_checks)
+        print(
+            "0017 downgrade succeeded before restore and refused afterward without losing audit."
+        )
     finally:
         database(f"DROP DATABASE {catalog_db}")
     print(

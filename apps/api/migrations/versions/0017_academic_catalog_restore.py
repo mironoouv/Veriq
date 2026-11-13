@@ -47,7 +47,15 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute("""
+        LOCK TABLE public.courses, public.study_groups IN ACCESS EXCLUSIVE MODE;
         LOCK TABLE public.academic_catalog_events IN ACCESS EXCLUSIVE MODE;
+        SET LOCAL row_security = off;
+        DO $$
+        BEGIN
+            IF EXISTS (SELECT FROM public.academic_catalog_events WHERE action='restore') THEN
+                RAISE EXCEPTION 'Cannot downgrade 0017: restore audit history must be preserved';
+            END IF;
+        END $$;
         ALTER TABLE public.academic_catalog_events
             DROP CONSTRAINT academic_catalog_events_action_check,
             ADD CHECK (action IN ('create','edit','archive'));

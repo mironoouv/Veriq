@@ -307,3 +307,9 @@ the title or description on an archived row, including during restoration.
 The service increments the version and appends a restore event in the same
 transaction. Restoration keeps the original ID and has no effect on other
 academic or exam processes.
+
+Downgrade from 0017 is supported only before the first restore event.
+The migration locks the catalog and audit tables and checks history before
+changing policies or constraints. If a restore event exists, use a forward
+migration for compatibility changes. The rejected downgrade preserves the
+revision, policies and audit history.

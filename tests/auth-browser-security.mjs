@@ -435,6 +435,48 @@ async function catalogJourney(operator, org, other) {
   await page.getByRole("textbox", { name: "Поиск по названию" }).fill("");
   await browserExpect(revised).toBeVisible();
 
+  phase = "Academic catalog Vue restore errors and stale tenant response";
+  const restoreUrl = "**/academic/courses/*/restore";
+  const restoreButton = revised.getByRole("button", { name: "Восстановить" });
+  for (const [status, message] of [
+    [409, "Запись изменилась"],
+    [404, "Недостаточно прав"],
+    [503, "Не удалось выполнить запрос"],
+  ]) {
+    await page.route(restoreUrl, (route) => route.fulfill({ status }), { times: 1 });
+    await restoreButton.click();
+    await browserExpect(page.getByRole("alert")).toContainText(message);
+    await browserExpect(revised).toBeVisible();
+  }
+
+  let intercepted;
+  const pendingRestore = new Promise((resolve) => { intercepted = resolve; });
+  let release;
+  const responseGate = new Promise((resolve) => { release = resolve; });
+  await page.route(restoreUrl, async (route) => {
+    intercepted();
+    await responseGate;
+    await route.fulfill({ status: 503 });
+  }, { times: 1 });
+  await restoreButton.click();
+  await pendingRestore;
+  const switchCatalog = (tenant) => page.evaluate((id) => {
+    history.pushState({}, "", "/academic/" + id);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }, tenant);
+  await switchCatalog(other);
+  await browserExpect(page.getByRole("alert")).toContainText("Недостаточно прав");
+  await browserExpect(revised).toHaveCount(0);
+  const oldResponse = page.waitForResponse((response) =>
+    response.url().endsWith("/restore") && response.status() === 503
+  );
+  release();
+  await oldResponse;
+  await browserExpect(page.getByRole("alert")).toContainText("Недостаточно прав");
+  await browserExpect(revised).toHaveCount(0);
+  await switchCatalog(org);
+  await browserExpect(revised).toBeVisible();
+
   phase = "Academic catalog Vue restoration";
   await revised.getByRole("button", { name: "Восстановить" }).click();
   await browserExpect(revised).toHaveCount(0);
