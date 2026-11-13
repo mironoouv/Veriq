@@ -2,7 +2,7 @@
 
 import sys
 
-from auth_issuer_acl import DIGEST, ID, LIMITS, check
+from auth_issuer_acl import DIGEST, ID, LIMITS, check, open_db
 
 MFA = {"veriq_mfa_verifier"}
 API = {"veriq_api"}
@@ -70,6 +70,27 @@ FUNCTIONS = (
 )
 
 
+def recovery_trigger(database):
+    with open_db(database) as owner:
+        row = owner.execute("""
+            SELECT p.proowner::regrole::text,p.prosecdef,p.proconfig,
+              EXISTS(SELECT FROM aclexplode(coalesce(p.proacl,acldefault('f',p.proowner)))
+                     WHERE grantee=0 AND privilege_type='EXECUTE'),
+              count(*) FILTER (WHERE t.tgenabled='O' AND NOT t.tgisinternal)
+            FROM pg_proc p LEFT JOIN pg_trigger t ON t.tgfoid=p.oid
+            WHERE p.oid='public.veriq_recovery_authority_changed()'::regprocedure
+            GROUP BY p.oid
+        """).fetchone()
+        assert row == (
+            "veriq_session_store",
+            True,
+            ["search_path=pg_catalog, pg_temp"],
+            False,
+            10,
+        ), row
+
+
 if __name__ == "__main__":
     for database in sys.argv[1:]:
         check(database, FUNCTIONS, invokers=INVOKERS)
+        recovery_trigger(database)

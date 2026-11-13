@@ -75,3 +75,16 @@ MFA verifier may also call session use and the catalog auditor may check
 session current. The raw revoke helper has no runtime caller.
 Refresh rotates the existing session credential. Revoke-all includes the
 current session, and there is no keep-current variant in this contract.
+
+## MFA behavioral follow-up
+
+The factor-disable service rejects a rotated session and a session without
+fresh factor-disable assurance without changing factors or recording a
+successful event. The HTTPS journey checks the missing-assurance response.
+The SQL audit also verifies the recovery authority trigger's owner, mode,
+search path, PUBLIC ACL and enabled trigger count.
+
+The MFA verifier is a trusted database principal with direct factor-table
+DML. Application authorization and TOTP verification are not independent
+database guarantees against compromise of that credential. Separating
+these privileges requires a separate design review.

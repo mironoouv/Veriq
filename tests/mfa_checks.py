@@ -306,6 +306,20 @@ def checks(
     assert sessions.resolve(elevated).user_id == user
     with api.begin() as connection:
         denied(lambda: service.require_fresh(connection, elevated, Purpose.SENSITIVE))
+    # Exercise the actual mutation entry point, not only its freshness helper.
+    before_events = query(
+        owner, "SELECT count(*) FROM auth_audit_events WHERE result='succeeded'"
+    )
+    before_factors = query(owner, "SELECT count(*) FROM mfa_factors")
+    denied(lambda: service.disable(current, RequestContext.new()))  # rotated
+    denied(
+        lambda: service.disable(elevated, RequestContext.new())
+    )  # stale/wrong purpose
+    assert query(owner, "SELECT count(*) FROM mfa_factors") == before_factors
+    assert (
+        query(owner, "SELECT count(*) FROM auth_audit_events WHERE result='succeeded'")
+        == before_events
+    )
     switched = sessions.rotate(elevated, organization_id=scope_a)
     assert sessions.resolve(switched).organization_id == scope_a
     with api.begin() as connection:

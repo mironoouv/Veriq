@@ -730,6 +730,8 @@ async function run(browser) {
   );
   const joining = `/organizations/${org}/joining`;
   await expect(operator, joining, { action: "set_intake", enabled: true }, 404);
+  await expect(operator, "/auth/mfa/disable", {}, 401);
+  compose("exec", "-T", "redis", "redis-cli", "FLUSHDB");
   await expect(operator, "/auth/mfa/step-up", { purpose: "sensitive" }, 202);
   await expect(operator, "/auth/mfa/challenge", { code: totp(seed) }, 429);
   // Reset only the dedicated ephemeral Redis test instance after asserting its budget.
