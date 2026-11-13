@@ -181,6 +181,23 @@ with socket.socket(socket.AF_UNIX) as s:
                             "SELECT user_id,factor_id,session_id,purpose FROM mfa_operation_attestations WHERE id=%s",
                             (proofs[0],),
                         ).fetchone() == (user, factor, UUID(sid), "factor_disable")
+                    with connect(
+                        host=host,
+                        dbname="veriq",
+                        user="veriq_dev",
+                        password=os.environ["VERIQ_DB_PASSWORD"],
+                    ) as db:
+                        db.execute(
+                            "UPDATE auth_sessions SET revoked_at=now(),revoke_reason='logout' WHERE id=%s",
+                            (sid,),
+                        )
+                    assert call(request("attest_disable", args)) == {"error": "denied"}
+                    assert call(
+                        request("attest_disable", {**args, "account": str(uuid4())})
+                    ) == {"error": "denied"}
+                    assert call(
+                        request("attest_disable", {**args, "session": str(uuid4())})
+                    ) == {"error": "denied"}
                 else:
                     assert call(request("check_fixture_totp", {"code": wrong})) == {
                         "matches": False

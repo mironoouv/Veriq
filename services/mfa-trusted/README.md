@@ -71,3 +71,10 @@ The SQL login remains trusted to submit a verified counter. The existing
 0022 entry points remain available to that login for the staged SQL suite.
 Legacy Auth still runs separately and must be cut over before claiming
 SEC-MFA-01 closed.
+
+The PostgreSQL credential is a privileged trust boundary. In 0023 it
+retains EXECUTE on attest and can issue a disable attestation directly
+when it also has valid session proof and passes SQL policy checks. The
+counter entry point likewise relies on the process to verify the code.
+IPC authentication does not constrain someone holding that SQL credential.
+Keep it isolated and unprovisioned outside the dedicated test setup.
