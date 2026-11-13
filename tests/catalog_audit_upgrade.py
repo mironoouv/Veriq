@@ -23,6 +23,17 @@ def main() -> None:
     owner = create_database_engine()
     if sys.argv[1:] == ["seed"]:
         seed(owner)
+        with owner.begin() as db:
+            db.execute(
+                text("""
+                INSERT INTO organization_role_permissions(organization_id,role_id,permission_code)
+                SELECT r.organization_id,r.id,p.code FROM organization_roles r
+                CROSS JOIN permissions p
+                WHERE r.code='org_admin' AND p.scope='organization'
+                  AND p.code IN ('academic.catalog.read','academic.catalog.manage','academic.catalog.archive')
+                ON CONFLICT DO NOTHING
+            """)
+            )
     sessions = Sessions(role("veriq_api"), issuer=role("veriq_session_issuer"))
     verifier = CredentialVerifier(role("veriq_credential_verifier"))
     catalog = AcademicCatalog(sessions)
