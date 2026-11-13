@@ -87,6 +87,48 @@ jobs:
           test "$before" = "$(database -c 'SELECT id,kind,status,attempts,available_at FROM background_jobs ORDER BY id')"
           test "$(database -c 'SELECT count(*) FROM background_job_keys')" = 2
           test "$(database -c "SELECT count(*) FROM background_jobs WHERE status='succeeded' AND finished_at IS NOT NULL")" = 1
+      - name: Measure populated 0021 migration and lock contention
+        run: |
+          docker compose exec -T postgres createdb -U veriq_dev audit_queue_large
+          scratch() {
+            docker compose run --no-deps --rm -T -e VERIQ_DB_NAME=audit_queue_large migrate "$@"
+          }
+          database() {
+            docker compose exec -T postgres psql -XAt -v ON_ERROR_STOP=1 -U veriq_dev -d audit_queue_large "$@"
+          }
+          scratch alembic upgrade 0020
+          database -c "INSERT INTO background_jobs(id,kind,status,attempts)
+            SELECT gen_random_uuid(),'probe',CASE WHEN n%5=0 THEN 'pending' ELSE 'succeeded' END,1
+            FROM generate_series(1,500000) n"
+          snapshot() {
+            database -c "SELECT count(*),sum(hashtextextended(row(id,kind,status,attempts,available_at)::text,0)) FROM background_jobs"
+          }
+          before="$(snapshot)"
+          database -c "BEGIN; LOCK TABLE background_jobs IN ROW EXCLUSIVE MODE; SELECT pg_sleep(18); COMMIT" >/dev/null &
+          blocker=$!
+          for attempt in {1..50}; do
+            if [ "$(database -c "SELECT count(*) FROM pg_locks WHERE relation='background_jobs'::regclass AND mode='RowExclusiveLock' AND granted")" = 1 ]; then
+              break
+            fi
+            sleep 0.1
+          done
+          test "$(database -c "SELECT count(*) FROM pg_locks WHERE relation='background_jobs'::regclass AND mode='RowExclusiveLock' AND granted")" = 1
+          if scratch alembic upgrade 0021 > "$RUNNER_TEMP/queue-lock.log" 2>&1; then
+            echo "Migration unexpectedly succeeded with a held queue lock"
+            exit 1
+          fi
+          grep -q 'lock timeout' "$RUNNER_TEMP/queue-lock.log"
+          wait "$blocker"
+          test "$(database -c 'SELECT version_num FROM alembic_version')" = 0020
+          test "$(snapshot)" = "$before"
+          echo "Lock contention: 0021 refused without changing revision or queue data"
+          start="$(date +%s%3N)"
+          scratch alembic upgrade 0021
+          echo "0021 upgrade wall time including Compose startup: $(($(date +%s%3N)-start)) ms for 500000 jobs"
+          test "$(snapshot)" = "$before"
+          test "$(database -c 'SELECT count(*) FROM background_job_keys')" = 500000
+          test "$(database -c 'SELECT count(*) FROM background_jobs WHERE finished_at IS NOT NULL')" = 400000
+          echo "Preserved all 500000 queue records and keys; stamped 400000 terminal records"
       - name: Compare effective ACLs and exercise restricted logins
         run: |
           docker compose run --no-deps --rm -T migrate python - veriq audit_upgrade < tests/postgres_security_audit.py

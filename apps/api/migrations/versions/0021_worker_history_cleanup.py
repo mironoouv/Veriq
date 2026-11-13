@@ -10,6 +10,7 @@ depends_on = None
 
 def upgrade() -> None:
     op.execute("""
+        SET LOCAL lock_timeout = '5s';
         LOCK TABLE public.background_jobs IN ACCESS EXCLUSIVE MODE;
         ALTER TABLE public.background_jobs ADD COLUMN finished_at timestamptz;
         -- Legacy rows have no authoritative completion timestamp.

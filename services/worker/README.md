@@ -87,3 +87,18 @@ jobs and all security audit tables are outside the retention rule.
 UUID-only keys survive deletion to preserve enqueue idempotency and prevent
 reuse of fencing identities. Their storage grows with the number of distinct
 jobs. External handlers still need their own idempotency contracts.
+
+### Applying 0021 to an existing queue
+
+Schedule a maintenance window and rehearse on a representative copy.
+Pause all queue producers and stop old workers gracefully before migration.
+Confirm no queue transactions remain open. Check backup and restore readiness
+and available space for the backfill, indexes and WAL. Revision 0021 holds
+ACCESS EXCLUSIVE through commit, blocking reads and writes to the queue.
+A five-second lock timeout bounds the wait for locks. It does not bound
+the work after acquisition. If migration fails, confirm the revision and
+queue are unchanged, resolve the blocker and retry during maintenance.
+After commit verify revision 0021, queue counts and deduplication keys,
+then start workers and resume producers. Use forward repair or a verified
+restore if required. The CI timing includes container startup and is not
+an estimate for production hardware or queues larger than the fixture.
