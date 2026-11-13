@@ -170,6 +170,36 @@ jobs:
             -e VERIQ_TEST_LOGIN_VERIFIER_PASSWORD -e VERIQ_TEST_LOGIN_ISSUER_PASSWORD \
             -e VERIQ_TEST_MFA_DB_PASSWORD -v "$PWD/tests:/audit:ro" migrate \
             python /audit/auth_session_acl.py veriq audit_upgrade
+      - name: Preserve populated MFA history from 0021 to 0022
+        run: |
+          docker compose exec -T postgres createdb -U veriq_dev audit_mfa_upgrade
+          scratch() {
+            docker compose run --no-deps --rm -T -e VERIQ_DB_NAME=audit_mfa_upgrade migrate "$@"
+          }
+          database() {
+            docker compose exec -T postgres psql -XAt -v ON_ERROR_STOP=1 -U veriq_dev -d audit_mfa_upgrade "$@"
+          }
+          scratch alembic upgrade 0021
+          database <<'SQL'
+          INSERT INTO users(id,email_normalized,password_hash)
+            VALUES ('00000000-0000-0000-0000-000000000002','audit@example.invalid','fixture');
+          INSERT INTO mfa_factors(user_id,id,key_id,ciphertext,confirmed_at,pending_until)
+            SELECT id,gen_random_uuid(),'fixture',decode('00','hex'),now(),now()+interval '10 minutes' FROM users;
+          INSERT INTO mfa_recovery_requests(id,user_id,source_id,credential_version,state)
+            SELECT gen_random_uuid(),id,gen_random_uuid(),credential_version,'pending_identity' FROM users;
+          INSERT INTO auth_audit_events(id,request_id,correlation_id,event_type,result,actor_id,target_id,notify)
+            SELECT gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'mfa_attempt','succeeded',id,id,false FROM users;
+          SQL
+          snapshot() {
+            database -c 'SELECT to_jsonb(t) FROM mfa_factors t ORDER BY id;
+              SELECT to_jsonb(t) FROM mfa_recovery_requests t ORDER BY id;
+              SELECT to_jsonb(t) FROM auth_audit_events t ORDER BY id'
+          }
+          before="$(snapshot)"
+          test "$(printf '%s\n' "$before" | wc -l)" -eq 3
+          scratch alembic upgrade 0022
+          test "$before" = "$(snapshot)"
+          echo "0021 -> 0022 preserved all MFA fixture rows"
       - name: Verify staged trusted MFA boundary
         run: |
           docker compose run --no-deps --rm -T \

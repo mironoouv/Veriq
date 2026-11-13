@@ -43,3 +43,8 @@ Enrollment and recovery are deliberately outside these entry points.
 Cutover requires wiring those paths, then revoking legacy grants and
 removing the legacy keyring mount in the same maintenance transition.
 The legacy path still works, so SEC-MFA-01 remains open.
+
+PostgreSQL does not validate TOTP. The right to call attest is reserved
+for the trusted process after it independently verifies the cryptographic
+proof. Keep the login disabled outside disposable tests until integration
+and atomic legacy cutover. The current IPC fixture does not call SQL.

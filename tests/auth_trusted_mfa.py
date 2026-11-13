@@ -2,10 +2,12 @@
 
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from uuid import uuid4
 
 from auth_issuer_acl import DIGEST, ID, LOGINS, check, open_db
-from psycopg import sql
+from psycopg import errors, sql
 
 LOGINS["veriq_mfa_trusted"] = "VERIQ_TEST_MFA_TRUSTED_PASSWORD"
 FUNCTIONS = (
@@ -23,7 +25,7 @@ FUNCTIONS = (
 
 
 def lifecycle(database):
-    account, factor, session = uuid4(), uuid4(), uuid4()
+    account, factor, session, org = (uuid4() for _ in range(4))
     digest = uuid4().bytes + uuid4().bytes
     with open_db(database) as owner, open_db(database, "veriq_mfa_trusted") as trusted:
         owner.execute(
@@ -44,12 +46,24 @@ def lifecycle(database):
         """,
             (session, account, digest),
         )
-        attest = "SELECT public.veriq_trusted_mfa_attest(%s,%s,%s,%s,%s,NULL)"
+        owner.execute(
+            "INSERT INTO organizations(id,slug,display_name,timezone,status) VALUES (%s,%s,'Fixture','UTC','active')",
+            (org, org.hex),
+        )
+        owner.execute(
+            "INSERT INTO organization_memberships(id,organization_id,user_id,status) VALUES (%s,%s,%s,'active')",
+            (uuid4(), org, account),
+        )
+        owner.execute(
+            "UPDATE auth_sessions SET organization_id=%s,grant_epoch=0 WHERE id=%s",
+            (org, session),
+        )
+        attest = "SELECT public.veriq_trusted_mfa_attest(%s,%s,%s,%s,%s,%s)"
         consume = "SELECT public.veriq_trusted_mfa_disable(%s,%s,%s,%s,%s,%s,%s)"
         expired, valid = uuid4(), uuid4()
         for proof in (expired, valid):
             assert trusted.execute(
-                attest, (proof, account, factor, session, digest)
+                attest, (proof, account, factor, session, digest, org)
             ).fetchone() == (True,)
         owner.execute(
             "UPDATE mfa_operation_attestations SET expires_at=now() WHERE id=%s",
@@ -62,6 +76,66 @@ def lifecycle(database):
         assert trusted.execute(
             consume, (valid, account, uuid4(), session, digest, event, event)
         ).fetchone() == (False,)
+        owner.execute(
+            "UPDATE auth_sessions SET revoked_at=now(),revoke_reason='logout' WHERE id=%s",
+            (session,),
+        )
+        assert trusted.execute(
+            consume, (valid, account, factor, session, digest, event, event)
+        ).fetchone() == (False,)
+        owner.execute(
+            "UPDATE auth_sessions SET revoked_at=NULL,revoke_reason=NULL WHERE id=%s",
+            (session,),
+        )
+        owner.execute("UPDATE auth_sessions SET grant_epoch=1 WHERE id=%s", (session,))
+        assert trusted.execute(
+            consume, (valid, account, factor, session, digest, event, event)
+        ).fetchone() == (False,)
+        owner.execute("UPDATE auth_sessions SET grant_epoch=0 WHERE id=%s", (session,))
+        owner.execute(
+            "INSERT INTO organization_mfa_policies(organization_id,required) VALUES (%s,true)",
+            (org,),
+        )
+        assert trusted.execute(
+            consume, (valid, account, factor, session, digest, event, event)
+        ).fetchone() == (False,)
+        assert trusted.execute(
+            attest, (uuid4(), account, factor, session, digest, org)
+        ).fetchone() == (False,)
+        owner.execute(
+            "DELETE FROM organization_mfa_policies WHERE organization_id=%s", (org,)
+        )
+        valid = uuid4()
+        assert trusted.execute(
+            attest, (valid, account, factor, session, digest, org)
+        ).fetchone() == (True,)
+        owner.execute("""
+            CREATE FUNCTION public.audit_fixture_reject() RETURNS trigger LANGUAGE plpgsql AS
+            $$ BEGIN RAISE EXCEPTION 'fixture audit failure'; END $$;
+            CREATE TRIGGER audit_fixture_reject BEFORE INSERT ON auth_audit_events
+            FOR EACH ROW EXECUTE FUNCTION public.audit_fixture_reject();
+        """)
+        try:
+            trusted.execute(
+                consume, (valid, account, factor, session, digest, event, event)
+            )
+        except errors.RaiseException as exc:
+            assert exc.diag.message_primary == "fixture audit failure"
+        else:
+            raise AssertionError("Audit failure did not abort mutation")
+        finally:
+            owner.execute(
+                "DROP TRIGGER audit_fixture_reject ON auth_audit_events; DROP FUNCTION audit_fixture_reject()"
+            )
+        assert owner.execute(
+            "SELECT revoked_at FROM auth_sessions WHERE id=%s", (session,)
+        ).fetchone() == (None,)
+        assert owner.execute(
+            "SELECT consumed_at FROM mfa_operation_attestations WHERE id=%s", (valid,)
+        ).fetchone() == (None,)
+        assert owner.execute(
+            "SELECT count(*) FROM mfa_factors WHERE id=%s", (factor,)
+        ).fetchone() == (1,)
         with trusted.transaction(force_rollback=True):
             assert trusted.execute(
                 consume, (valid, account, factor, session, digest, event, event)
@@ -75,12 +149,17 @@ def lifecycle(database):
         assert owner.execute(
             "SELECT count(*) FROM auth_audit_events WHERE id=%s", (event,)
         ).fetchone() == (0,)
-        assert trusted.execute(
-            consume, (valid, account, factor, session, digest, event, event)
-        ).fetchone() == (True,)
-        assert trusted.execute(
-            consume, (valid, account, factor, session, digest, event, event)
-        ).fetchone() == (False,)
+        barrier = Barrier(2)
+
+        def attempt(_):
+            with open_db(database, "veriq_mfa_trusted") as db:
+                barrier.wait(timeout=5)
+                return db.execute(
+                    consume, (valid, account, factor, session, digest, event, event)
+                ).fetchone()[0]
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            assert sorted(pool.map(attempt, range(2))) == [False, True]
         assert owner.execute(
             "SELECT count(*) FROM auth_audit_events WHERE id=%s", (event,)
         ).fetchone() == (1,)
@@ -91,6 +170,14 @@ def lifecycle(database):
 
 if __name__ == "__main__":
     clean, upgraded = sys.argv[1:]
+    for database in (clean, upgraded):
+        with open_db(database) as admin:
+            assert admin.execute(
+                "SELECT rolcanlogin FROM pg_roles WHERE rolname='veriq_mfa_trusted'"
+            ).fetchone() == (False,)
+            assert admin.execute(
+                "SELECT relrowsecurity,relforcerowsecurity FROM pg_class WHERE oid='public.mfa_operation_attestations'::regclass"
+            ).fetchone() == (True, True)
     with open_db(clean) as admin:
         admin.execute(
             sql.SQL("ALTER ROLE veriq_mfa_trusted LOGIN PASSWORD {}").format(
@@ -99,4 +186,22 @@ if __name__ == "__main__":
         )
     for database in (clean, upgraded):
         check(database, FUNCTIONS)
+        for role in (
+            "veriq_api",
+            "veriq_worker",
+            "veriq_mfa_verifier",
+            "veriq_mfa_trusted",
+        ):
+            with open_db(database, role) as db:
+                for statement in (
+                    "INSERT INTO mfa_operation_attestations DEFAULT VALUES",
+                    "UPDATE mfa_operation_attestations SET consumed_at=now()",
+                    "DELETE FROM mfa_operation_attestations",
+                ):
+                    try:
+                        db.execute(statement)
+                    except errors.InsufficientPrivilege:
+                        pass
+                    else:
+                        raise AssertionError("Unexpected attestation table grant")
         lifecycle(database)
