@@ -344,6 +344,49 @@ disable_factor(sys.argv[1], **json.load(sys.stdin))
                             extra_groups=[],
                         )
 
+                    fake_server = """
+import socket, sys, time
+with socket.socket(socket.AF_UNIX) as listener:
+    listener.bind(sys.argv[1])
+    listener.listen()
+    print("ready", flush=True)
+    peer, _ = listener.accept()
+    with peer:
+        if sys.argv[2] == "wrong_uid":
+            peer.sendall(b'{"disabled": true}\\n')
+        else:
+            assert peer.makefile("rb").readline()
+            if sys.argv[2] == "timeout":
+                time.sleep(5)
+"""
+                    for behavior in ("wrong_uid", "timeout", "disconnect"):
+                        fake_endpoint = directory / f"{behavior}.sock"
+                        directory.chmod(0o770 if behavior == "wrong_uid" else 0o750)
+                        with subprocess.Popen(
+                            [
+                                sys.executable,
+                                "-c",
+                                fake_server,
+                                str(fake_endpoint),
+                                behavior,
+                            ],
+                            stdout=subprocess.PIPE,
+                            user=10003 if behavior == "wrong_uid" else 10002,
+                            group=10002,
+                            extra_groups=[],
+                        ) as fake:
+                            try:
+                                assert fake.stdout.readline() == b"ready\n"
+                                fake_endpoint.chmod(0o660)
+                                directory.chmod(0o750)
+                                denial = invoke_disable(fake_endpoint, disable_args)
+                                assert denial.returncode != 0
+                                assert (
+                                    b"IpcDenied: MFA operation denied" in denial.stderr
+                                )
+                            finally:
+                                fake.terminate()
+                                fake.wait(timeout=6)
                     assert invoke_disable(endpoint, disable_args).returncode != 0
                     assert (
                         invoke_disable(
@@ -378,10 +421,13 @@ disable_factor(sys.argv[1], **json.load(sys.stdin))
                         assert db.execute(
                             "SELECT revoked_at FROM auth_sessions WHERE id=%s", (sid,)
                         ).fetchone() == (None,)
-                        assert db.execute(
-                            "SELECT id, consumed_at FROM mfa_operation_attestations WHERE factor_id=%s ORDER BY id",
-                            (factor,),
-                        ).fetchall() == before
+                        assert (
+                            db.execute(
+                                "SELECT id, consumed_at FROM mfa_operation_attestations WHERE factor_id=%s ORDER BY id",
+                                (factor,),
+                            ).fetchall()
+                            == before
+                        )
                         db.execute(
                             "DROP TRIGGER reject_fixture_audit ON auth_audit_events"
                         )

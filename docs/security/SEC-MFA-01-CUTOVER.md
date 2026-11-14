@@ -24,3 +24,28 @@ The new internal adapter has no HTTP route. The service registers the disable co
 - Keyring compromise threatens factor confidentiality. It is independently sensitive from trusted SQL credentials.
 
 Before cutover, require a separate reviewed migration that enforces cryptographic authorization independent of SQL login possession, for example by verifying a short-lived scoped signature from an isolated signing key on every attestation entry point. Bind the signature to session, factor, account, organization, operation and counter. Preserve single use and transactionally check current state. Review enrollment and recovery separately. Prepare isolated credentials and run upgrade and rollback drills, stop legacy Auth writers, then apply the reviewed changes and revoke legacy grants together. Keep Public Auth disabled pending the production gate.
+
+
+## IPC identity and uncertain outcome
+
+The service authenticates the API client via Linux SO_PEERCRED. The adapter
+authenticates the server against UID 10002, pinned to the shipped service
+identity. The socket's parent must be a real directory owned by that UID and
+must deny group and other writes. Deploy it under a trusted mount path and
+reserve the service UID. Only an authenticated server's positive response
+confirms success.
+
+A timeout or EOF can occur after commit. There is no automatic retry.
+Operational investigation should use the internal request UUID to reconcile the
+committed audit row with the factor and session state through an authorized
+database operator. A missing audit row during an in-flight request is
+inconclusive. A caller-facing lookup requires a separate reviewed contract
+that binds request IDs to authenticated account and operation and handles
+revoked sessions without leaking account state.
+
+Before enabling the new path, verify the independent cryptographic proof
+migration, migrate and test authorization for all MFA writers, and stop or
+drain legacy Auth instances. Apply the grant revocation and route change
+with Auth offline, verify production logins and rollback controls, then reopen
+only after explicit authorization. Keep production credentials inactive until
+that gate.
