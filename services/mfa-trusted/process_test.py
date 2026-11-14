@@ -403,6 +403,54 @@ with socket.socket(socket.AF_UNIX) as listener:
                             "UPDATE mfa_factors SET last_counter=-1 WHERE id=%s",
                             (factor,),
                         )
+                    organization, other_org, membership = uuid4(), uuid4(), uuid4()
+                    with admin() as db:
+                        for org in (organization, other_org):
+                            db.execute(
+                                "INSERT INTO organizations(id,slug,display_name,timezone,status) VALUES (%s,%s,'Fixture','UTC','active')",
+                                (org, org.hex),
+                            )
+                        db.execute(
+                            "INSERT INTO organization_memberships(id,organization_id,user_id,status) VALUES (%s,%s,%s,'active')",
+                            (membership, organization, user),
+                        )
+                        db.execute(
+                            "UPDATE auth_sessions SET organization_id=%s, grant_epoch=0 WHERE id=%s",
+                            (organization, sid),
+                        )
+                    scoped = {**disable_args, "organization": str(organization)}
+                    for wrong_args in (
+                        {**scoped, "organization": str(other_org)},
+                        {**scoped, "account": str(uuid4())},
+                        {**scoped, "factor": str(uuid4())},
+                    ):
+                        assert invoke_disable(endpoint, wrong_args).returncode != 0
+                    with admin() as db:
+                        db.execute(
+                            "UPDATE auth_sessions SET grant_epoch=(SELECT grant_epoch FROM organization_memberships WHERE id=%s) WHERE id=%s",
+                            (membership, sid),
+                        )
+                        db.execute(
+                            "INSERT INTO organization_mfa_policies (organization_id, required) VALUES (%s,true)",
+                            (organization,),
+                        )
+                    assert invoke_disable(endpoint, scoped).returncode != 0
+                    with admin() as db:
+                        db.execute(
+                            "DELETE FROM organization_mfa_policies WHERE organization_id=%s",
+                            (organization,),
+                        )
+                        for status in ("revoked", "active"):
+                            db.execute(
+                                "UPDATE organization_memberships SET status=%s WHERE id=%s",
+                                (status, membership),
+                            )
+                    assert invoke_disable(endpoint, scoped).returncode != 0
+                    with admin() as db:
+                        db.execute(
+                            "UPDATE auth_sessions SET organization_id=NULL, grant_epoch=NULL WHERE id=%s",
+                            (sid,),
+                        )
                     with admin() as db:
                         before = db.execute(
                             "SELECT id, consumed_at FROM mfa_operation_attestations WHERE factor_id=%s ORDER BY id",
