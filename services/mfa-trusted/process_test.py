@@ -361,6 +361,10 @@ disable_factor(sys.argv[1], **json.load(sys.stdin))
                             (factor,),
                         )
                     with admin() as db:
+                        before = db.execute(
+                            "SELECT id, consumed_at FROM mfa_operation_attestations WHERE factor_id=%s ORDER BY id",
+                            (factor,),
+                        ).fetchall()
                         db.execute("""CREATE FUNCTION reject_fixture_audit() RETURNS trigger LANGUAGE plpgsql AS
                             $$ BEGIN RAISE EXCEPTION 'fixture audit denial'; END $$;
                             CREATE TRIGGER reject_fixture_audit BEFORE INSERT ON auth_audit_events
@@ -375,9 +379,9 @@ disable_factor(sys.argv[1], **json.load(sys.stdin))
                             "SELECT revoked_at FROM auth_sessions WHERE id=%s", (sid,)
                         ).fetchone() == (None,)
                         assert db.execute(
-                            "SELECT count(*) FROM mfa_operation_attestations WHERE factor_id=%s",
+                            "SELECT id, consumed_at FROM mfa_operation_attestations WHERE factor_id=%s ORDER BY id",
                             (factor,),
-                        ).fetchone() == (1,)
+                        ).fetchall() == before
                         db.execute(
                             "DROP TRIGGER reject_fixture_audit ON auth_audit_events"
                         )
