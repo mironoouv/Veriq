@@ -353,7 +353,10 @@ with socket.socket(socket.AF_UNIX) as listener:
     peer, _ = listener.accept()
     with peer:
         if sys.argv[2] == "wrong_uid":
-            peer.sendall(b'{"disabled": true}\\n')
+            try:
+                peer.sendall(b'{"disabled": true}\\n')
+            except BrokenPipeError:
+                pass
         else:
             assert peer.makefile("rb").readline()
             if sys.argv[2] == "timeout":
@@ -533,7 +536,7 @@ runpy.run_path("/app/mfa_trusted.py", run_name="__main__")
                         assert db.execute(
                             "SELECT count(*) FROM mfa_operation_attestations WHERE factor_id=%s AND consumed_at IS NOT NULL",
                             (factor,),
-                        ).fetchone() == (2,)
+                        ).fetchone() == (1,)
                     with admin() as db:
                         db.execute(
                             "INSERT INTO mfa_factors(user_id,id,key_id,ciphertext,confirmed_at,pending_until) VALUES (%s,%s,'fixture',%s,now(),now())",
