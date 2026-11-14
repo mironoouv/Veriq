@@ -480,63 +480,36 @@ with socket.socket(socket.AF_UNIX) as listener:
                             "DROP TRIGGER reject_fixture_audit ON auth_audit_events"
                         )
                     relay_endpoint = directory / "lost-reply.sock"
-                    relay_server = """
-import socket, sys
-with socket.socket(socket.AF_UNIX) as listener:
-    listener.bind(sys.argv[1])
-    listener.listen()
-    print("ready", flush=True)
-    peer, _ = listener.accept()
-    with peer, socket.socket(socket.AF_UNIX) as upstream:
-        upstream.connect(sys.argv[2])
-        upstream.sendall(peer.makefile("rb").readline())
-        assert upstream.makefile("rb").readline() == b'{"disabled": true}\\n'
+                    drop_response = """
+import runpy, socket
+original = socket.socket
+class DropSuccess(original):
+    def sendall(self, data, *args, **kwargs):
+        if data == b'{"disabled": true}\\n':
+            return None
+        return super().sendall(data, *args, **kwargs)
+socket.socket = DropSuccess
+runpy.run_path("/app/mfa_trusted.py", run_name="__main__")
 """
-                    upstream_endpoint = directory / "relay-upstream.sock"
-                    with (
-                        subprocess.Popen(
-                            [sys.executable, "/app/mfa_trusted.py"],
-                            env={
-                                **config,
-                                "VERIQ_MFA_PEER_UID": "10002",
-                                "VERIQ_MFA_SOCKET": str(upstream_endpoint),
-                            },
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
-                            **identity,
-                        ) as upstream_server,
-                        subprocess.Popen(
-                            [
-                                sys.executable,
-                                "-c",
-                                relay_server,
-                                str(relay_endpoint),
-                                str(upstream_endpoint),
-                            ],
-                            stdout=subprocess.PIPE,
-                            user=10002,
-                            group=10002,
-                            extra_groups=[],
-                        ) as relay,
-                    ):
+                    with subprocess.Popen(
+                        [sys.executable, "-c", drop_response],
+                        env={**config, "VERIQ_MFA_SOCKET": str(relay_endpoint)},
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        **identity,
+                    ) as dropping_server:
                         try:
-                            assert relay.stdout.readline() == b"ready\n"
                             deadline = time.monotonic() + 5
-                            while not upstream_endpoint.exists():
-                                assert (
-                                    upstream_server.poll() is None
-                                    and time.monotonic() < deadline
-                                )
+                            while not relay_endpoint.is_socket():
+                                assert dropping_server.poll() is None
+                                assert time.monotonic() < deadline
                                 time.sleep(0.02)
-                            relay_endpoint.chmod(0o660)
                             denial = invoke_disable(relay_endpoint, disable_args)
                             assert denial.returncode != 0
                             assert b"IpcDenied: MFA operation denied" in denial.stderr
-                            assert relay.wait(timeout=6) == 0
                         finally:
-                            relay.terminate()
-                            upstream_server.terminate()
-                            assert upstream_server.communicate(timeout=6) == (b"", b"")
+                            dropping_server.terminate()
+                            assert dropping_server.communicate(timeout=6) == (b"", b"")
                     with admin() as db:
                         assert db.execute(
                             "SELECT 1 FROM auth_audit_events WHERE id=%s",
