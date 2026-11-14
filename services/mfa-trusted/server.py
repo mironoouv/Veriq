@@ -98,15 +98,18 @@ def serve() -> None:
             options="-c statement_timeout=2000",
         )
 
-    def attest_disable(args):
-        if set(args) != {
+    def attest_disable(args, *, disable=False):
+        fields = {
             "account",
             "factor",
             "session",
             "organization",
             "token",
             "code",
-        }:
+        }
+        if disable:
+            fields.update(("request", "correlation"))
+        if set(args) != fields:
             raise IpcDenied("Invalid attestation arguments")
         if any(not isinstance(v, str) for k, v in args.items() if k != "organization"):
             raise IpcDenied("Invalid attestation arguments")
@@ -140,12 +143,32 @@ def serve() -> None:
                 (proof, *scope, counter, encrypted),
             ).fetchone() != (True,):
                 raise IpcDenied("Factor denied")
-        return {"attestation": str(proof)}
+            if disable:
+                result = db.execute(
+                    "SELECT public.veriq_trusted_mfa_disable(%s,%s,%s,%s,%s,%s,%s)",
+                    (
+                        proof,
+                        *scope[:4],
+                        UUID(args["request"]),
+                        UUID(args["correlation"]),
+                    ),
+                ).fetchone()
+                if result != (True,):
+                    raise IpcDenied("Factor denied")
+        return {"disabled": True} if disable else {"attestation": str(proof)}
+
+    disable_handler = {}
+    if host and os.environ.get("VERIQ_TEST_TRUSTED_DISABLE") == "1":
+
+        def disable_factor(args):
+            return attest_disable(args, disable=True)
+
+        disable_handler["disable_factor"] = disable_factor
 
     handlers = {
         "health": health,
         **(
-            {"attest_disable": attest_disable}
+            {"attest_disable": attest_disable, **disable_handler}
             if host
             else {"check_fixture_totp": verify}
         ),

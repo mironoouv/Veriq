@@ -133,6 +133,7 @@ def main():
                 )
         config = {
             **{k: v for k, v in os.environ.items() if k != "VERIQ_DB_PASSWORD"},
+            "VERIQ_TEST_TRUSTED_DISABLE": "1",
             "VERIQ_MFA_PEER_UID": "10001",
             "VERIQ_MFA_SOCKET": str(endpoint),
             "VERIQ_TRUSTED_KEYRING": str(root / "keys"),
@@ -320,6 +321,88 @@ with socket.socket(socket.AF_UNIX) as s:
                     assert call(
                         request("attest_disable", {**args, "session": str(uuid4())})
                     ) == {"error": "denied"}
+                    disable_args = {
+                        **args,
+                        "request": str(uuid4()),
+                        "correlation": str(uuid4()),
+                    }
+                    adapter = """
+import json, sys
+from veriq.mfa_ipc import disable_factor
+disable_factor(sys.argv[1], **json.load(sys.stdin))
+"""
+
+                    def invoke_disable(path, arguments):
+                        return subprocess.run(
+                            [sys.executable, "-c", adapter, str(path)],
+                            input=json.dumps(arguments).encode(),
+                            check=False,
+                            capture_output=True,
+                            timeout=6,
+                            user=10001,
+                            group=10002,
+                            extra_groups=[],
+                        )
+
+                    assert invoke_disable(endpoint, disable_args).returncode != 0
+                    assert (
+                        invoke_disable(
+                            directory / "absent.sock", disable_args
+                        ).returncode
+                        != 0
+                    )
+                    with admin() as db:
+                        db.execute(
+                            "UPDATE auth_sessions SET revoked_at=NULL,revoke_reason=NULL WHERE id=%s",
+                            (sid,),
+                        )
+                        db.execute(
+                            "UPDATE mfa_factors SET last_counter=-1 WHERE id=%s",
+                            (factor,),
+                        )
+                    with admin() as db:
+                        db.execute("""CREATE FUNCTION reject_fixture_audit() RETURNS trigger LANGUAGE plpgsql AS
+                            $$ BEGIN RAISE EXCEPTION 'fixture audit denial'; END $$;
+                            CREATE TRIGGER reject_fixture_audit BEFORE INSERT ON auth_audit_events
+                            FOR EACH ROW EXECUTE FUNCTION reject_fixture_audit()""")
+                    assert invoke_disable(endpoint, disable_args).returncode != 0
+                    with admin() as db:
+                        assert db.execute(
+                            "SELECT last_counter FROM mfa_factors WHERE id=%s",
+                            (factor,),
+                        ).fetchone() == (-1,)
+                        assert db.execute(
+                            "SELECT revoked_at FROM auth_sessions WHERE id=%s", (sid,)
+                        ).fetchone() == (None,)
+                        assert db.execute(
+                            "SELECT count(*) FROM mfa_operation_attestations WHERE factor_id=%s",
+                            (factor,),
+                        ).fetchone() == (1,)
+                        db.execute(
+                            "DROP TRIGGER reject_fixture_audit ON auth_audit_events"
+                        )
+                    with ThreadPoolExecutor(2) as pool:
+                        results = list(
+                            pool.map(
+                                lambda _: invoke_disable(endpoint, disable_args),
+                                range(2),
+                            )
+                        )
+                    assert sum(result.returncode == 0 for result in results) == 1
+                    for result in results:
+                        for secret in (token.encode(), code.encode(), seed):
+                            assert secret not in result.stdout + result.stderr
+                    with admin() as db:
+                        assert (
+                            db.execute(
+                                "SELECT 1 FROM mfa_factors WHERE id=%s", (factor,)
+                            ).fetchone()
+                            is None
+                        )
+                        assert db.execute(
+                            "SELECT count(*) FROM mfa_operation_attestations WHERE factor_id=%s AND consumed_at IS NOT NULL",
+                            (factor,),
+                        ).fetchone() == (1,)
                     with connect(
                         host=host,
                         dbname="postgres",
