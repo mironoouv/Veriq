@@ -2,7 +2,7 @@
 
 - Durable lease, heartbeat, fencing and recovery are implemented in 0020 for short SQL handlers. External side effects can repeat. Connection loss during heartbeat and shutdown during active work still need broader fault testing.
 - Queue retention (0021): terminal jobs expire after 168 hours. UUID deduplication keys remain indefinitely. Monitor key growth before adding external handlers.
-- API tests use pinned httpx2 for Starlette TestClient and check a synthetic GET with warnings treated as errors. Enforcement of required checks on main remains a separate open item under decision 76.
+- API tests use pinned httpx2 for Starlette TestClient and check a synthetic GET with warnings treated as errors. Decision 76: on 2026-11-15 the [GitHub branch rules endpoint](https://api.github.com/repos/mironoouv/Veriq/rules/branches/main) listed required checks, production, process and postgres-audit for main. Separately, all eight jobs passed on [PR #36 HEAD](https://github.com/mironoouv/Veriq/pull/36/checks), and push workflows passed on squash commit c4c9d6153c5c9772532e0eee67064d62e1c2be11: [Foundation](https://github.com/mironoouv/Veriq/actions/runs/43645271448), [Trusted MFA IPC](https://github.com/mironoouv/Veriq/actions/runs/43645271304), [PostgreSQL Security Audit](https://github.com/mironoouv/Veriq/actions/runs/43645271394).
 
 ## Public Auth — NOT READY
 
