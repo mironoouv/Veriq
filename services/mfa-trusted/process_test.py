@@ -133,6 +133,7 @@ def main():
                 )
         config = {
             **{k: v for k, v in os.environ.items() if k != "VERIQ_DB_PASSWORD"},
+            "VERIQ_TEST_TRUSTED_DISABLE": "1",
             "VERIQ_MFA_PEER_UID": "10001",
             "VERIQ_MFA_SOCKET": str(endpoint),
             "VERIQ_TRUSTED_KEYRING": str(root / "keys"),
@@ -320,6 +321,240 @@ with socket.socket(socket.AF_UNIX) as s:
                     assert call(
                         request("attest_disable", {**args, "session": str(uuid4())})
                     ) == {"error": "denied"}
+                    disable_args = {
+                        **args,
+                        "request": str(uuid4()),
+                        "correlation": str(uuid4()),
+                    }
+                    adapter = """
+import json, sys
+from veriq.mfa_ipc import disable_factor
+disable_factor(sys.argv[1], **json.load(sys.stdin))
+"""
+
+                    def invoke_disable(path, arguments):
+                        return subprocess.run(
+                            [sys.executable, "-c", adapter, str(path)],
+                            input=json.dumps(arguments).encode(),
+                            check=False,
+                            capture_output=True,
+                            timeout=6,
+                            user=10001,
+                            group=10002,
+                            extra_groups=[],
+                        )
+
+                    fake_server = """
+import socket, sys, time
+with socket.socket(socket.AF_UNIX) as listener:
+    listener.bind(sys.argv[1])
+    listener.listen()
+    print("ready", flush=True)
+    peer, _ = listener.accept()
+    with peer:
+        if sys.argv[2] == "wrong_uid":
+            try:
+                peer.sendall(b'{"disabled": true}\\n')
+            except BrokenPipeError:
+                pass
+        else:
+            assert peer.makefile("rb").readline()
+            if sys.argv[2] == "timeout":
+                time.sleep(5)
+"""
+                    for behavior in ("wrong_uid", "timeout", "disconnect"):
+                        fake_endpoint = directory / f"{behavior}.sock"
+                        directory.chmod(0o770 if behavior == "wrong_uid" else 0o750)
+                        with subprocess.Popen(
+                            [
+                                sys.executable,
+                                "-c",
+                                fake_server,
+                                str(fake_endpoint),
+                                behavior,
+                            ],
+                            stdout=subprocess.PIPE,
+                            user=10003 if behavior == "wrong_uid" else 10002,
+                            group=10002,
+                            extra_groups=[],
+                        ) as fake:
+                            try:
+                                assert fake.stdout.readline() == b"ready\n"
+                                fake_endpoint.chmod(0o660)
+                                directory.chmod(0o750)
+                                denial = invoke_disable(fake_endpoint, disable_args)
+                                assert denial.returncode != 0
+                                assert (
+                                    b"IpcDenied: MFA operation denied" in denial.stderr
+                                )
+                            finally:
+                                fake.terminate()
+                                fake.wait(timeout=6)
+                    assert invoke_disable(endpoint, disable_args).returncode != 0
+                    assert (
+                        invoke_disable(
+                            directory / "absent.sock", disable_args
+                        ).returncode
+                        != 0
+                    )
+                    with admin() as db:
+                        db.execute(
+                            "UPDATE auth_sessions SET revoked_at=NULL,revoke_reason=NULL WHERE id=%s",
+                            (sid,),
+                        )
+                        db.execute(
+                            "UPDATE mfa_factors SET last_counter=-1 WHERE id=%s",
+                            (factor,),
+                        )
+                    organization, other_org, membership = uuid4(), uuid4(), uuid4()
+                    with admin() as db:
+                        for org in (organization, other_org):
+                            db.execute(
+                                "INSERT INTO organizations(id,slug,display_name,timezone,status) VALUES (%s,%s,'Fixture','UTC','active')",
+                                (org, org.hex),
+                            )
+                        db.execute(
+                            "INSERT INTO organization_memberships(id,organization_id,user_id,status) VALUES (%s,%s,%s,'active')",
+                            (membership, organization, user),
+                        )
+                        db.execute(
+                            "UPDATE auth_sessions SET organization_id=%s, grant_epoch=0 WHERE id=%s",
+                            (organization, sid),
+                        )
+                    scoped = {**disable_args, "organization": str(organization)}
+                    for wrong_args in (
+                        {**scoped, "organization": str(other_org)},
+                        {**scoped, "account": str(uuid4())},
+                        {**scoped, "factor": str(uuid4())},
+                    ):
+                        assert invoke_disable(endpoint, wrong_args).returncode != 0
+                    with admin() as db:
+                        db.execute(
+                            "UPDATE auth_sessions SET grant_epoch=(SELECT grant_epoch FROM organization_memberships WHERE id=%s) WHERE id=%s",
+                            (membership, sid),
+                        )
+                        db.execute(
+                            "INSERT INTO organization_mfa_policies (organization_id, required) VALUES (%s,true)",
+                            (organization,),
+                        )
+                    assert invoke_disable(endpoint, scoped).returncode != 0
+                    with admin() as db:
+                        db.execute(
+                            "DELETE FROM organization_mfa_policies WHERE organization_id=%s",
+                            (organization,),
+                        )
+                        for status in ("revoked", "active"):
+                            db.execute(
+                                "UPDATE organization_memberships SET status=%s WHERE id=%s",
+                                (status, membership),
+                            )
+                    assert invoke_disable(endpoint, scoped).returncode != 0
+                    with admin() as db:
+                        db.execute(
+                            "UPDATE auth_sessions SET organization_id=NULL, grant_epoch=NULL WHERE id=%s",
+                            (sid,),
+                        )
+                    with admin() as db:
+                        before = db.execute(
+                            "SELECT id, consumed_at FROM mfa_operation_attestations WHERE factor_id=%s ORDER BY id",
+                            (factor,),
+                        ).fetchall()
+                        db.execute("""CREATE FUNCTION reject_fixture_audit() RETURNS trigger LANGUAGE plpgsql AS
+                            $$ BEGIN RAISE EXCEPTION 'fixture audit denial'; END $$;
+                            CREATE TRIGGER reject_fixture_audit BEFORE INSERT ON auth_audit_events
+                            FOR EACH ROW EXECUTE FUNCTION reject_fixture_audit()""")
+                    assert invoke_disable(endpoint, disable_args).returncode != 0
+                    with admin() as db:
+                        assert db.execute(
+                            "SELECT last_counter FROM mfa_factors WHERE id=%s",
+                            (factor,),
+                        ).fetchone() == (-1,)
+                        assert db.execute(
+                            "SELECT revoked_at FROM auth_sessions WHERE id=%s", (sid,)
+                        ).fetchone() == (None,)
+                        assert (
+                            db.execute(
+                                "SELECT id, consumed_at FROM mfa_operation_attestations WHERE factor_id=%s ORDER BY id",
+                                (factor,),
+                            ).fetchall()
+                            == before
+                        )
+                        db.execute(
+                            "DROP TRIGGER reject_fixture_audit ON auth_audit_events"
+                        )
+                    relay_endpoint = directory / "lost-reply.sock"
+                    drop_response = """
+import runpy, socket
+original = socket.socket
+class DropSuccess(original):
+    def sendall(self, data, *args, **kwargs):
+        if data == b'{"disabled": true}\\n':
+            return None
+        return super().sendall(data, *args, **kwargs)
+socket.socket = DropSuccess
+runpy.run_path("/app/mfa_trusted.py", run_name="__main__")
+"""
+                    with subprocess.Popen(
+                        [sys.executable, "-c", drop_response],
+                        env={**config, "VERIQ_MFA_SOCKET": str(relay_endpoint)},
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        **identity,
+                    ) as dropping_server:
+                        try:
+                            deadline = time.monotonic() + 5
+                            while not relay_endpoint.is_socket():
+                                assert dropping_server.poll() is None
+                                assert time.monotonic() < deadline
+                                time.sleep(0.02)
+                            denial = invoke_disable(relay_endpoint, disable_args)
+                            assert denial.returncode != 0
+                            assert b"IpcDenied: MFA operation denied" in denial.stderr
+                        finally:
+                            dropping_server.terminate()
+                            assert dropping_server.communicate(timeout=6) == (b"", b"")
+                    with admin() as db:
+                        assert db.execute(
+                            "SELECT 1 FROM auth_audit_events WHERE id=%s",
+                            (disable_args["request"],),
+                        ).fetchone() == (1,)
+                    assert invoke_disable(endpoint, disable_args).returncode != 0
+                    for secret in (
+                        token.encode(),
+                        code.encode(),
+                        seed,
+                        password.encode(),
+                    ):
+                        assert secret not in denial.stdout + denial.stderr
+                    with admin() as db:
+                        assert (
+                            db.execute(
+                                "SELECT 1 FROM mfa_factors WHERE id=%s", (factor,)
+                            ).fetchone()
+                            is None
+                        )
+                        assert db.execute(
+                            "SELECT count(*) FROM mfa_operation_attestations WHERE factor_id=%s AND consumed_at IS NOT NULL",
+                            (factor,),
+                        ).fetchone() == (1,)
+                    with admin() as db:
+                        db.execute(
+                            "INSERT INTO mfa_factors(user_id,id,key_id,ciphertext,confirmed_at,pending_until) VALUES (%s,%s,'fixture',%s,now(),now())",
+                            (user, factor, encrypted),
+                        )
+                        db.execute(
+                            "UPDATE auth_sessions SET revoked_at=NULL,revoke_reason=NULL WHERE id=%s",
+                            (sid,),
+                        )
+                    concurrent_args = {**disable_args, "request": str(uuid4())}
+                    with ThreadPoolExecutor(2) as pool:
+                        results = list(
+                            pool.map(
+                                lambda _: invoke_disable(endpoint, concurrent_args),
+                                range(2),
+                            )
+                        )
+                    assert sum(result.returncode == 0 for result in results) == 1
                     with connect(
                         host=host,
                         dbname="postgres",
