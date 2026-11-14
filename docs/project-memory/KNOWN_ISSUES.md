@@ -2,7 +2,7 @@
 
 - Durable lease, heartbeat, fencing and recovery are implemented in 0020 for short SQL handlers. External side effects can repeat. Connection loss during heartbeat and shutdown during active work still need broader fault testing.
 - Queue retention (0021): terminal jobs expire after 168 hours. UUID deduplication keys remain indefinitely. Monitor key growth before adding external handlers.
-- Starlette/httpx compatibility remains tracked. Browser E2E already runs in CI.
+- API tests use pinned httpx2 for Starlette TestClient and check a synthetic GET with warnings treated as errors. Enforcement of required checks on main remains a separate open item under decision 76.
 
 ## Public Auth — NOT READY
 

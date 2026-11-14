@@ -1,3 +1,5 @@
+import subprocess
+import sys
 from uuid import UUID
 
 from fastapi.testclient import TestClient
@@ -63,3 +65,27 @@ def test_redis_outage_and_recovery() -> None:
         assert "private Redis configuration" not in result.text
         online = True
         assert client.get(READY).status_code == 200
+
+
+def test_testclient_transport_without_warnings() -> None:
+    # A fresh interpreter checks import-time warnings even if pytest imported TestClient.
+    subprocess.run(
+        [
+            sys.executable,
+            "-W",
+            "error",
+            "-c",
+            """
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from veriq.main import create_app
+
+with TestClient(create_app(engine=create_engine("sqlite://"), check_redis=lambda: True)) as client:
+    response = client.get("/api/v1/health/live")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+""",
+        ],
+        check=True,
+        timeout=15,
+    )
