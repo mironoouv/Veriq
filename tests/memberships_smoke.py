@@ -250,7 +250,7 @@ def main() -> None:
             "0021",
             "Downgrading 0022 would discard MFA attestation history",
         )
-        scratch(catalog_db, "alembic", "upgrade", "head")
+        scratch(catalog_db, "alembic", "upgrade", "0024")
         scratch(catalog_db, "python", "-", stdin=catalog_checks)
         reject_downgrade(
             catalog_db,
@@ -258,6 +258,7 @@ def main() -> None:
             "0023",
             "Downgrading 0024 would discard Teacher assignment history",
         )
+        scratch(catalog_db, "alembic", "upgrade", "head")
         scratch(catalog_db, "python", "-", "after-downgrade", stdin=catalog_checks)
         print(
             "0017 empty downgrade succeeded and 0022 and 0024 downgrades refused without losing audit."
@@ -265,7 +266,7 @@ def main() -> None:
     finally:
         database(f"DROP DATABASE {catalog_db}")
     print(
-        "Identity smoke: fresh install, upgrades through 0024, runtime roles, TEN-01 and sessions passed."
+        "Identity smoke: fresh install, upgrades through 0025, runtime roles, TEN-01 and sessions passed."
     )
 
 
