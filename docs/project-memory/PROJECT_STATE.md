@@ -162,3 +162,18 @@
 ## Academic & Studio Slice 2 — первое чтение сессии
 
 - PROPOSED: доказательство связывается с аккаунтом, tenant и эпохой до выбора ключей; привязка и действительность перепроверяются под блокировками перед записью. Открыты эффективный EXECUTE, транзакционная авторизация, рабочий аудит и HTTPS-приёмка TEN-01/AUD-01. Реализация требует отдельного допуска. SEC-MFA-01 — OPEN. Public Auth — NOT READY.
+
+## Academic & Studio Slice 2 — повторная проверка сессии
+
+- В изолированном Compose-проекте `veriq-session-recheck-768adb25` на PostgreSQL 17.11 с актуальными миграциями действующая роль `veriq_session_store` подтвердила одинаковую привязку при двух чтениях. Штатная ротация через независимое соединение открыла сессию в tenant B и сделала прежнюю привязку A недействительной. Отдельная сессия истекла по `clock_timestamp()` после начала транзакции и не прошла повторную проверку. Снимки состава A/B с отдельного соединения совпали.
+- Для повтора из корня задать разные временные синтетические значения `VERIQ_DB_PASSWORD`, `VERIQ_API_DB_PASSWORD` и `VERIQ_WORKER_DB_PASSWORD`. Использовать одноразовый проект:
+  ```powershell
+  docker --context desktop-linux info
+  $p = 'veriq-session-recheck-' + [guid]::NewGuid().ToString('N').Substring(0,8)
+  docker --context desktop-linux compose -p $p up -d --wait postgres
+  docker --context desktop-linux compose -p $p run --build --rm --no-deps -T migrate
+  docker --context desktop-linux compose -p $p run --rm --no-deps -T -e PYTHONPATH=/app -v "${PWD}/tests:/fixtures:ro" migrate python /fixtures/academic_slice2_session_recheck_checks.py
+  docker --context desktop-linux compose -p $p down --volumes
+  ```
+- Проверена сессионная предпосылка TEN-01 в пределах допуска ревьюера. Эффективный EXECUTE будущих функций, FORCE RLS состава, полная транзакционная авторизация, рабочий аудит и приёмка TEN-01/AUD-01 через HTTPS открыты. SEC-MFA-01 — OPEN. Public Auth — NOT READY. Риск прежних полномочий доверенной SQL-роли сохраняется.
+- CI на будущем HEAD PR: checks, production, process и postgres-audit ожидают публикации контроллером.
