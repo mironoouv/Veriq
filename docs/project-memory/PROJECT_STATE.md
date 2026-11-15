@@ -157,3 +157,8 @@
   docker --context desktop-linux compose -p $p down --volumes
   ```
 - Checks, production, process и postgres-audit ожидают публикации контроллером. ACL будущего помощника, транзакционная авторизация, рабочий аудит и полная TEN-01/AUD-01 через HTTPS открыты. SEC-MFA-01 — OPEN. Public Auth — NOT READY.
+
+
+## Academic & Studio Slice 2 — первое чтение сессии
+
+- PROPOSED: доказательство связывается с аккаунтом, tenant и эпохой до выбора ключей; привязка и действительность перепроверяются под блокировками перед записью. Открыты эффективный EXECUTE, транзакционная авторизация, рабочий аудит и HTTPS-приёмка TEN-01/AUD-01. Реализация требует отдельного допуска. SEC-MFA-01 — OPEN. Public Auth — NOT READY.
