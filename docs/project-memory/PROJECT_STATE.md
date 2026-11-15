@@ -124,3 +124,17 @@
   docker --context desktop-linux compose -p $p down --volumes
   ```
 - Checks, production, process и postgres-audit на HEAD нового PR ожидают публикации контроллером. Атомарность интервалов и аудита, ACL рабочих команд и полная TEN-01/AUD-01 через HTTPS открыты.
+
+
+## Academic & Studio Slice 2 — атомарность перевода
+
+- На PostgreSQL 17.11 (0025) в Docker Desktop Linux, проект veriq-transfer-atomic-6c9fbcc6, проверены успешная фиксация двух интервалов и одного события с общим серверным временем, сохранность tenant B, повтор после успеха, отказ при пересечении и откат при принудительном отказе тестового аудита. Состояние сверялось через независимое соединение.
+- Для повтора из корня в PowerShell задать три разные синтетические переменные VERIQ_DB_PASSWORD, VERIQ_API_DB_PASSWORD и VERIQ_WORKER_DB_PASSWORD:
+  ```powershell
+  $p = 'veriq-transfer-atomic-' + [guid]::NewGuid().ToString('N').Substring(0,8)
+  docker --context desktop-linux compose -p $p up -d --wait postgres
+  docker --context desktop-linux compose -p $p run --build --rm --no-deps -T migrate
+  docker --context desktop-linux compose -p $p run --rm --no-deps -T -e PYTHONPATH=/app -v "${PWD}/tests:/fixtures:ro" migrate python /fixtures/academic_slice2_transfer_atomicity_checks.py
+  docker --context desktop-linux compose -p $p down --volumes
+  ```
+- Checks, production, process и postgres-audit на новом HEAD ожидают публикации контроллером. Рабочие ACL, транзакционная авторизация, аудит рабочей команды и полная TEN-01/AUD-01 через HTTPS остаются открытыми. SEC-MFA-01 — OPEN. Public Auth — NOT READY.
