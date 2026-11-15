@@ -143,3 +143,17 @@
 ## Academic & Studio Slice 2 — SQL-полномочия перевода
 
 - PROPOSED: определены будущие полномочия команды и двух помощников. Открыты проверка минимальных столбцовых UPDATE для блокирующих SELECT, граница первоначального чтения сессии, FORCE RLS, эффективные EXECUTE и интеграционная приёмка TEN-01/AUD-01 с рабочим аудитом. Отдельный допуск владельца требуется для реализации, выдачи прав и включения. SEC-MFA-01 — OPEN. Public Auth — NOT READY.
+
+
+## Academic & Studio Slice 2 — ACL блокировки сессии
+
+- На PostgreSQL 17.11 в Compose-проекте veriq-session-lock-acl-857bbf82 роль veriq_session_store подтвердила эффективные столбцовые права и блокировку по ID и доказательству. Конкурентный NOWAIT вернул 55P03, несовпадающее доказательство не вернуло и не заблокировало строку tenant B. Каталог подтвердил, что RLS и FORCE RLS на auth_sessions выключены. Отказ в этом чтении обеспечивает предикат, а изоляция будущего помощника требует отдельной проверки.
+- Для повтора из корня задать три разные временные переменные VERIQ_DB_PASSWORD, VERIQ_API_DB_PASSWORD и VERIQ_WORKER_DB_PASSWORD, затем выполнить в PowerShell:
+  ```powershell
+  $p = 'veriq-session-lock-acl-' + [guid]::NewGuid().ToString('N').Substring(0,8)
+  docker --context desktop-linux compose -p $p up -d --wait postgres
+  docker --context desktop-linux compose -p $p run --build --rm --no-deps -T migrate
+  docker --context desktop-linux compose -p $p run --rm --no-deps -T -e PYTHONPATH=/app -v "${PWD}/tests:/fixtures:ro" migrate python /fixtures/academic_slice2_session_lock_acl_checks.py
+  docker --context desktop-linux compose -p $p down --volumes
+  ```
+- Checks, production, process и postgres-audit ожидают публикации контроллером. ACL будущего помощника, транзакционная авторизация, рабочий аудит и полная TEN-01/AUD-01 через HTTPS открыты. SEC-MFA-01 — OPEN. Public Auth — NOT READY.
