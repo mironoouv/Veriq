@@ -114,7 +114,7 @@
 
 ## Academic & Studio Slice 2 — тест блокировок перевода
 
-- Утверждён только тест протокола из main 4966755. На PostgreSQL 17.11 (0025) в Docker Desktop Linux, проект veriq-transfer-locks-fc98c85f, проверены одиночный logout через veriq_auth_revoke, UPDATE статуса обеих строк аккаунта и модель отзыва назначения на каждой группе. PostgreSQL подтвердил ожидание писателя, видимость отзыва после фиксации и конфликты NOWAIT/try-lock.
+- Ревьюер в авторежиме (approved_by=reviewer) допустил только тест протокола из main 4966755 на одноразовой PostgreSQL. На PostgreSQL 17.11 (0025) в Docker Desktop Linux, проект veriq-transfer-locks-fc98c85f, проверены одиночный logout через veriq_auth_revoke, UPDATE статуса обеих строк аккаунта и модель отзыва назначения на каждой группе. PostgreSQL подтвердил ожидание писателя, видимость отзыва после фиксации и конфликты NOWAIT/try-lock.
 - Для повтора из корня в PowerShell задать три разных временных пароля Compose (VERIQ_DB_PASSWORD, VERIQ_API_DB_PASSWORD, VERIQ_WORKER_DB_PASSWORD):
   ```powershell
   $p = 'veriq-transfer-locks-' + [guid]::NewGuid().ToString('N').Substring(0,8)
