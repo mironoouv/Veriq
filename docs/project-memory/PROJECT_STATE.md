@@ -138,3 +138,8 @@
   docker --context desktop-linux compose -p $p down --volumes
   ```
 - Checks, production, process и postgres-audit на новом HEAD ожидают публикации контроллером. Рабочие ACL, транзакционная авторизация, аудит рабочей команды и полная TEN-01/AUD-01 через HTTPS остаются открытыми. SEC-MFA-01 — OPEN. Public Auth — NOT READY.
+
+
+## Academic & Studio Slice 2 — SQL-полномочия перевода
+
+- PROPOSED: определены будущие полномочия команды и двух помощников. Открыты проверка минимальных столбцовых UPDATE для блокирующих SELECT, граница первоначального чтения сессии, FORCE RLS, эффективные EXECUTE и интеграционная приёмка TEN-01/AUD-01 с рабочим аудитом. Отдельный допуск владельца требуется для реализации, выдачи прав и включения. SEC-MFA-01 — OPEN. Public Auth — NOT READY.
