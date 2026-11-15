@@ -185,3 +185,20 @@
 ## Academic & Studio Slice 2 — FORCE RLS привязки аккаунта
 
 - В профильном плане описаны проектные SELECT-политики для владельца помощника, составное соединение интервала с активным членством, повторная сверка привязки перед блокировкой и восстановление tenant-контекста. Добавлена будущая матрица PostgreSQL TEN-01 для синтетических A/B. Шаг документальный, матрица остаётся PROPOSED. Эффективные EXECUTE и FORCE RLS будущих ролей, транзакционная авторизация, рабочий аудит и полная приёмка TEN-01/AUD-01 через HTTPS остаются открытыми.
+
+- На PostgreSQL 17.11 в Compose-проекте `veriq-binding-8c66b7b0-final` тестовая роль NOLOGIN без BYPASSRLS и владения таблицами получила только указанные столбцовые SELECT. На обеих таблицах подтверждён FORCE RLS. Отсутствующий и пустой контекст скрыли все строки. Установка A или B открыла строки соответствующего tenant. Поиск из A вернул UUID для открытого интервала с активным членством A и пустой результат для чужого, закрытого или неактивного случая. После фиксации изменённой привязки на независимом соединении повторное чтение выявило несовпадение.
+- Для повтора из корня задать разные временные синтетические значения `VERIQ_DB_PASSWORD`, `VERIQ_API_DB_PASSWORD` и `VERIQ_WORKER_DB_PASSWORD`:
+  ```powershell
+  docker --context desktop-linux info
+  $p = 'veriq-binding-' + [guid]::NewGuid().ToString('N').Substring(0,8)
+  docker --context desktop-linux compose -p $p up -d --wait postgres
+  docker --context desktop-linux compose -p $p run --build --rm --no-deps -T migrate
+  docker --context desktop-linux compose -p $p run --rm --no-deps -T -e PYTHONPATH=/app -v "${PWD}/tests:/fixtures:ro" migrate python /fixtures/academic_slice2_account_binding_rls_checks.py
+  docker --context desktop-linux compose -p $p down --volumes
+  ```
+- CI на проверенном HEAD PR #57 `dfff7394b846452ebe10b8f0537efa48ae81e0e0`:
+  - checks — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43740093588)
+  - production — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43740093588)
+  - process — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43740093521)
+  - postgres-audit — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43740093571)
+- Для рабочей команды открыты доверенное происхождение и восстановление tenant-контекста, эффективный EXECUTE, отсутствие чужой блокировки, транзакционная авторизация, рабочий аудит и приёмка TEN-01/AUD-01 через HTTPS.
