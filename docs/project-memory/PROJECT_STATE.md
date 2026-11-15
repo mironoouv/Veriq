@@ -215,5 +215,9 @@
   docker --context desktop-linux compose -p $p run --rm --no-deps -T -e PYTHONPATH=/app -v "${PWD}/tests:/fixtures:ro" migrate python /fixtures/academic_slice2_tenant_context_checks.py
   docker --context desktop-linux compose -p $p down --volumes
   ```
-- CI на будущем HEAD ожидает публикации контроллером. Результаты checks, production, process и postgres-audit проверяются отдельно по опубликованному SHA.
+- CI на проверенном HEAD PR #58 `d4299b3c96b22e3ac9a738952c069abaf040cd66`:
+  - checks — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43742562510)
+  - production — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43742562510)
+  - process — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43742562570)
+  - postgres-audit — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43742562580)
 - Рабочий помощник остаётся PROPOSED. Открыты доверенное происхождение и восстановление tenant в рабочем помощнике, эффективный EXECUTE, отсутствие чужой блокировки, транзакционная авторизация, рабочий аудит и полная HTTPS-приёмка TEN-01/AUD-01.
