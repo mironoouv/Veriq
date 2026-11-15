@@ -196,5 +196,9 @@
   docker --context desktop-linux compose -p $p run --rm --no-deps -T -e PYTHONPATH=/app -v "${PWD}/tests:/fixtures:ro" migrate python /fixtures/academic_slice2_account_binding_rls_checks.py
   docker --context desktop-linux compose -p $p down --volumes
   ```
-- CI на HEAD рабочего PR ожидает публикации контроллером. После неё проверяются checks, production, process и postgres-audit с привязкой к опубликованному SHA.
+- CI на проверенном HEAD PR #57 `dfff7394b846452ebe10b8f0537efa48ae81e0e0`:
+  - checks — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43740093588)
+  - production — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43740093588)
+  - process — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43740093521)
+  - postgres-audit — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43740093571)
 - Для рабочей команды открыты доверенное происхождение и восстановление tenant-контекста, эффективный EXECUTE, отсутствие чужой блокировки, транзакционная авторизация, рабочий аудит и приёмка TEN-01/AUD-01 через HTTPS.
