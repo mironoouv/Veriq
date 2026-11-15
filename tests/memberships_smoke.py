@@ -33,6 +33,44 @@ def compose(*args: str, stdin: str | None = None) -> None:
     )
 
 
+def reject_downgrade(
+    database_name: str, source: str, target: str, message: str
+) -> None:
+    result = subprocess.run(
+        [
+            *COMPOSE,
+            "run",
+            "--no-deps",
+            "--rm",
+            "-T",
+            "-e",
+            f"VERIQ_DB_NAME={database_name}",
+            "migrate",
+            "alembic",
+            "downgrade",
+            target,
+        ],
+        check=False,
+        capture_output=True,
+        encoding="utf-8",
+        timeout=120,
+    )
+    assert result.returncode != 0
+    assert message in result.stderr
+    scratch(
+        database_name,
+        "python",
+        "-",
+        source,
+        stdin="""import sys
+from veriq.database import create_database_engine
+
+with create_database_engine().connect() as connection:
+    assert connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalars().all() == [sys.argv[1]]
+""",
+    )
+
+
 def registration(database_name: str, *args: str) -> None:
     environment = {
         **os.environ,
@@ -205,38 +243,29 @@ def main() -> None:
         scratch(catalog_db, "python", "-", "seed", stdin=catalog_checks)
         scratch(catalog_db, "alembic", "upgrade", "0017")
         scratch(catalog_db, "alembic", "downgrade", "0016")
+        scratch(catalog_db, "alembic", "upgrade", "0022")
+        reject_downgrade(
+            catalog_db,
+            "0022",
+            "0021",
+            "Downgrading 0022 would discard MFA attestation history",
+        )
         scratch(catalog_db, "alembic", "upgrade", "head")
         scratch(catalog_db, "python", "-", stdin=catalog_checks)
-        result = subprocess.run(
-            [
-                *COMPOSE,
-                "run",
-                "--no-deps",
-                "--rm",
-                "-T",
-                "-e",
-                f"VERIQ_DB_NAME={catalog_db}",
-                "migrate",
-                "alembic",
-                "downgrade",
-                "0016",
-            ],
-            check=False,
-            capture_output=True,
-            encoding="utf-8",
-            timeout=120,
+        reject_downgrade(
+            catalog_db,
+            "0024",
+            "0023",
+            "Downgrading 0024 would discard Teacher assignment history",
         )
-        assert result.returncode != 0
-        assert "Downgrading 0022 would discard MFA attestation history" in result.stderr
-        scratch(catalog_db, "alembic", "current", "--check-heads")
         scratch(catalog_db, "python", "-", "after-downgrade", stdin=catalog_checks)
         print(
-            "0017 empty downgrade succeeded and 0022 downgrade refused without losing audit."
+            "0017 empty downgrade succeeded and 0022 and 0024 downgrades refused without losing audit."
         )
     finally:
         database(f"DROP DATABASE {catalog_db}")
     print(
-        "Identity smoke: fresh install, upgrades through 0023, runtime roles, TEN-01 and sessions passed."
+        "Identity smoke: fresh install, upgrades through 0024, runtime roles, TEN-01 and sessions passed."
     )
 
 
