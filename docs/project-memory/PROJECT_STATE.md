@@ -176,4 +176,8 @@
   docker --context desktop-linux compose -p $p down --volumes
   ```
 - Проверена сессионная предпосылка TEN-01 в пределах допуска ревьюера. Эффективный EXECUTE будущих функций, FORCE RLS состава, полная транзакционная авторизация, рабочий аудит и приёмка TEN-01/AUD-01 через HTTPS открыты. SEC-MFA-01 — OPEN. Public Auth — NOT READY. Риск прежних полномочий доверенной SQL-роли сохраняется.
-- CI на будущем HEAD PR: checks, production, process и postgres-audit ожидают публикации контроллером.
+- CI на проверенном HEAD PR #54 `256eccdd8b866251b67b3c802228d45a5336c852`:
+  - checks — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43717608463)
+  - production — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43717608463)
+  - process — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43717608473)
+  - postgres-audit — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43717608519)
