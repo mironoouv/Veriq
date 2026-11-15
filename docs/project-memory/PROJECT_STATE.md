@@ -175,5 +175,9 @@
   docker --context desktop-linux compose -p $p run --rm --no-deps -T -e PYTHONPATH=/app -v "${PWD}/tests:/fixtures:ro" migrate python /fixtures/academic_slice2_account_lock_acl_checks.py
   docker --context desktop-linux compose -p $p down --volumes
   ```
-- CI: checks, production, process и postgres-audit предстоит проверить на SHA, который опубликует контроллер.
+- CI на проверенном HEAD PR #55 `12618d68728ba5bc54b7aab44888e912e36d3cac`:
+  - checks — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43734046333)
+  - production — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43734046333)
+  - process — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43734046407)
+  - postgres-audit — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43734046345)
 - Матрица остаётся PROPOSED. Открыты привязка аккаунтов к tenant под FORCE RLS, эффективный EXECUTE будущих помощников, транзакционная авторизация, рабочий аудит и полная приёмка TEN-01/AUD-01 через HTTPS. SEC-MFA-01 — OPEN. Public Auth — NOT READY. Риск прежних полномочий доверенной SQL-роли сохраняется.
