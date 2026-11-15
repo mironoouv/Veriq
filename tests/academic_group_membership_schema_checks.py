@@ -2,7 +2,8 @@
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
-from threading import Event
+from queue import Queue
+from time import monotonic, sleep
 from uuid import uuid4
 
 from academic_catalog_checks import ADMIN, ORG, OUTSIDER, role
@@ -24,13 +25,13 @@ INSERT = f"""
 
 
 def concurrent_insert(owner: Engine, row: dict[str, object]) -> None:
-    started = Event()
+    backend: Queue[int] = Queue()
 
     def contender() -> str | None:
         try:
             with owner.begin() as db:
-                db.exec_driver_sql("SET LOCAL statement_timeout = '10s'")
-                started.set()
+                db.exec_driver_sql("SET LOCAL statement_timeout = '15s'")
+                backend.put(db.exec_driver_sql("SELECT pg_backend_pid()").scalar_one())
                 db.execute(text(INSERT), row | {"id": uuid4()})
         except DBAPIError as exc:
             return getattr(exc.orig, "sqlstate", None)
@@ -40,8 +41,28 @@ def concurrent_insert(owner: Engine, row: dict[str, object]) -> None:
         with owner.begin() as db:
             db.execute(text(INSERT), row)
             future = pool.submit(contender)
-            assert started.wait(5)
-        assert future.result(timeout=12) == "23P01"
+            contender_pid = backend.get(timeout=5)
+            first_pid = db.exec_driver_sql("SELECT pg_backend_pid()").scalar_one()
+            with owner.connect() as observer:
+                deadline = monotonic() + 5
+                while not observer.scalar(
+                    text("SELECT :first = ANY(pg_blocking_pids(:second))"),
+                    {"first": first_pid, "second": contender_pid},
+                ):
+                    assert not future.done(), "Contender completed without waiting"
+                    assert monotonic() < deadline, (
+                        "Contender did not wait for first INSERT"
+                    )
+                    sleep(0.02)
+        assert future.result(timeout=16) == "23P01"
+
+    with owner.connect() as db:
+        assert db.execute(
+            text(f"""SELECT id FROM {TABLE}
+                WHERE organization_id=:org AND group_id=:group_id AND membership_id=:member
+                AND tstzrange(start_at,end_at,'[)') && tstzrange(:start,:end,'[)')"""),
+            row,
+        ).scalars().all() == [row["id"]]
 
 
 def main() -> None:
