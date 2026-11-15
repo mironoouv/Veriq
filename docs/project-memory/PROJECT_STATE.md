@@ -202,3 +202,18 @@
   - process — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43740093521)
   - postgres-audit — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43740093571)
 - Для рабочей команды открыты доверенное происхождение и восстановление tenant-контекста, эффективный EXECUTE, отсутствие чужой блокировки, транзакционная авторизация, рабочий аудит и приёмка TEN-01/AUD-01 через HTTPS.
+
+## Academic & Studio Slice 2 — восстановление tenant-контекста
+
+- PostgreSQL 17.11, Compose-проект `veriq-context-7f0df431`, база мигрирована из `14fd4ab2f6ea439a41896370602528f47bc779ec`. Тестовый вызывающий подставляет доверенный tenant A. Функциональный SET очистил входной GUC, а локальный A открыл под FORCE RLS только строки состава и членства A. В той же транзакции исходные B и пустой GUC восстановились после возврата и после SQLSTATE P7501 с откатом до точки сохранения.
+- Для повтора из корня задать разные временные синтетические значения `VERIQ_DB_PASSWORD`, `VERIQ_API_DB_PASSWORD` и `VERIQ_WORKER_DB_PASSWORD`:
+  ```powershell
+  docker --context desktop-linux info
+  $p = 'veriq-context-' + [guid]::NewGuid().ToString('N').Substring(0,8)
+  docker --context desktop-linux compose -p $p up -d --wait postgres
+  docker --context desktop-linux compose -p $p run --build --rm --no-deps -T migrate
+  docker --context desktop-linux compose -p $p run --rm --no-deps -T -e PYTHONPATH=/app -v "${PWD}/tests:/fixtures:ro" migrate python /fixtures/academic_slice2_tenant_context_checks.py
+  docker --context desktop-linux compose -p $p down --volumes
+  ```
+- CI на будущем HEAD ожидает публикации контроллером. Результаты checks, production, process и postgres-audit проверяются отдельно по опубликованному SHA.
+- Рабочий помощник остаётся PROPOSED. Открыты доверенное происхождение и восстановление tenant в рабочем помощнике, эффективный EXECUTE, отсутствие чужой блокировки, транзакционная авторизация, рабочий аудит и полная HTTPS-приёмка TEN-01/AUD-01.
