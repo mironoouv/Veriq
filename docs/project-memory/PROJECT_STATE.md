@@ -81,3 +81,16 @@
 
 - Сверены SQL-пути сессий, членств, ролей и разрешений, назначений Teacher и архивирования. Триггер 0013 покрывает организационные полномочия. Одиночный logout блокирует строку без 7007. Для блокировки аккаунта и назначений Teacher участие в протоколе ещё не подтверждено. Каталог блокирует строку до аудиторского shared 670013.
 - Транзакционная граница остаётся PROPOSED. Нужны решение владельца по пробелам, подтверждение эффективных прав и прогоны обоих порядков фиксации по TEN-01 и AUD-01. SEC-MFA-01 — OPEN. Public Auth — NOT READY.
+
+## Academic & Studio Slice 2 — эффективные ACL
+
+- На PostgreSQL 17.11 с миграцией 0025 проверены `group_memberships` и `academic_group_teacher_assignments`. Отдельные подключения veriq_api и veriq_worker подтвердили ENABLE/FORCE RLS, отсутствие владения и членства в роли владельца, BYPASSRLS и эффективных прав на таблицы и столбцы. SELECT, INSERT, UPDATE и DELETE отклонены с SQLSTATE 42501. Строки синтетических организаций A/B сохранились.
+- Локальный прогон на Docker Desktop Linux прошёл в проекте `veriq-slice2-acl-b3c4900c`. Для повтора из корня репозитория задать три разные временные переменные `VERIQ_DB_PASSWORD`, `VERIQ_API_DB_PASSWORD`, `VERIQ_WORKER_DB_PASSWORD` и уникальное имя проекта в PowerShell:
+  ```powershell
+  $p = 'veriq-slice2-acl-' + [guid]::NewGuid().ToString('N').Substring(0,8)
+  docker --context desktop-linux compose -p $p up -d --wait postgres
+  docker --context desktop-linux compose -p $p run --build --rm --no-deps -T migrate
+  docker --context desktop-linux compose -p $p run --rm --no-deps -T -e PYTHONPATH=/app -v "${PWD}/tests:/fixtures:ro" migrate python /fixtures/academic_slice2_acl_checks.py
+  docker --context desktop-linux compose -p $p down --volumes
+  ```
+- CI на HEAD будущего PR ожидает публикации контроллером. ACL будущей команды перевода, гонки отзыва, AUD-01 и полная TEN-01 через HTTPS остаются открытыми. SEC-MFA-01 — OPEN. Public Auth — NOT READY.
