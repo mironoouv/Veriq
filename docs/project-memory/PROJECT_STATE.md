@@ -53,3 +53,9 @@
 - PR #21 returned for changes after independent review. Revision 0017 adds catalog restoration, with a version check and an audit event. Acceptance awaits repeat independent review.
 
 - SEC-ACA-01 is under review: revision 0018 requires a current session proof for catalog DML and records audit in the database transaction. Direct SQL read isolation remains a separate audit topic.
+
+## Academic & Studio Slice 2 — схема назначений Teacher
+
+- Владелец утвердил контракт PR #38 на main `0c1e206db0b5b8b6201721ba395140f238f7c916`. Подготовлена ревизия 0024 с составными tenant FK, grant_epoch, историей назначения и FORCE RLS без runtime-доступа. Проверка актуальности эпохи и роли относится к будущим серверным операциям.
+- Добавлен локальный сценарий для двух пустых изолированных БД. Из каталога apps/api запустить `python ../../tests/academic_group_teacher_schema_checks.py clean` и `python ../../tests/academic_group_teacher_schema_checks.py upgrade` на разных БД с настроенными параметрами подключения и `PYTHONPATH` на каталог API. На Docker Desktop Linux в изолированном Compose с PostgreSQL 17.11 прошли оба режима. Проверены сохранность каталога и аудита при обновлении, составные tenant FK, история назначения, ENABLE/FORCE RLS и отказ прямого DML и чтения под veriq_api. CI на HEAD нового PR ещё не подтверждён.
+- Полная TEN-01 приёмка рабочих HTTPS-операций и гонок отзыва относится к следующим PR Slice 2. SEC-MFA-01 — OPEN. Public Auth — NOT READY.
