@@ -162,3 +162,22 @@
 ## Academic & Studio Slice 2 — первое чтение сессии
 
 - PROPOSED: доказательство связывается с аккаунтом, tenant и эпохой до выбора ключей; привязка и действительность перепроверяются под блокировками перед записью. Открыты эффективный EXECUTE, транзакционная авторизация, рабочий аудит и HTTPS-приёмка TEN-01/AUD-01. Реализация требует отдельного допуска. SEC-MFA-01 — OPEN. Public Auth — NOT READY.
+
+## Academic & Studio Slice 2 — ACL блокировки аккаунтов
+
+- На PostgreSQL 17.11 в Compose-проекте `veriq-account-lock-7cc88201b` роль `veriq_session_store` прочитала `users.id` и `users.disabled_at` и заблокировала обе синтетические строки через `FOR NO KEY UPDATE NOWAIT`. Миграция 0007 даёт SELECT на эти столбцы. Эффективный UPDATE действует на `credential_version`, `password_hash` и `updated_at` по миграциям 0008, 0010 и 0012. Этого достаточно для блокирующего чтения при отсутствии UPDATE на `disabled_at`. Независимое соединение получило 55P03. Снимки статусов и состава A/B совпали.
+- Для повтора из корня задать разные временные синтетические значения `VERIQ_DB_PASSWORD`, `VERIQ_API_DB_PASSWORD` и `VERIQ_WORKER_DB_PASSWORD`:
+  ```powershell
+  docker --context desktop-linux info
+  $p = 'veriq-account-lock-' + [guid]::NewGuid().ToString('N').Substring(0,8)
+  docker --context desktop-linux compose -p $p up -d --wait postgres
+  docker --context desktop-linux compose -p $p run --build --rm --no-deps -T migrate
+  docker --context desktop-linux compose -p $p run --rm --no-deps -T -e PYTHONPATH=/app -v "${PWD}/tests:/fixtures:ro" migrate python /fixtures/academic_slice2_account_lock_acl_checks.py
+  docker --context desktop-linux compose -p $p down --volumes
+  ```
+- CI на проверенном HEAD PR #55 `12618d68728ba5bc54b7aab44888e912e36d3cac`:
+  - checks — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43734046333)
+  - production — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43734046333)
+  - process — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43734046407)
+  - postgres-audit — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43734046345)
+- Матрица остаётся PROPOSED. Открыты привязка аккаунтов к tenant под FORCE RLS, эффективный EXECUTE будущих помощников, транзакционная авторизация, рабочий аудит и полная приёмка TEN-01/AUD-01 через HTTPS. SEC-MFA-01 — OPEN. Public Auth — NOT READY. Риск прежних полномочий доверенной SQL-роли сохраняется.
