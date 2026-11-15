@@ -110,3 +110,17 @@
 
 - PROPOSED: писатель назначения берёт exclusive 670013 после ключей 7007 и до блокировок строк. Перевод удерживает shared 670013 и повторно проверяет назначения и grant_epoch на обеих группах. Предусмотрена остановка переводов перед обслуживающим DML, если участие писателя в протоколе нельзя подтвердить.
 - Реализация требует отдельного допуска. Открыты эффективные ACL будущих команд и PostgreSQL/HTTPS-приёмка TEN-01 и AUD-01 для обоих порядков фиксации и конфликта. SEC-MFA-01 — OPEN. Public Auth — NOT READY.
+
+
+## Academic & Studio Slice 2 — тест блокировок перевода
+
+- Ревьюер в авторежиме (approved_by=reviewer) допустил только тест протокола из main 4966755 на одноразовой PostgreSQL. На PostgreSQL 17.11 (0025) в Docker Desktop Linux, проект veriq-transfer-locks-fc98c85f, проверены одиночный logout через veriq_auth_revoke, UPDATE статуса обеих строк аккаунта и модель отзыва назначения на каждой группе. PostgreSQL подтвердил ожидание писателя, видимость отзыва после фиксации и конфликты NOWAIT/try-lock.
+- Для повтора из корня в PowerShell задать три разных временных пароля Compose (VERIQ_DB_PASSWORD, VERIQ_API_DB_PASSWORD, VERIQ_WORKER_DB_PASSWORD):
+  ```powershell
+  $p = 'veriq-transfer-locks-' + [guid]::NewGuid().ToString('N').Substring(0,8)
+  docker --context desktop-linux compose -p $p up -d --wait postgres
+  docker --context desktop-linux compose -p $p run --build --rm --no-deps -T migrate
+  docker --context desktop-linux compose -p $p run --rm --no-deps -T -e PYTHONPATH=/app -v "${PWD}/tests:/fixtures:ro" migrate python /fixtures/academic_slice2_transfer_lock_checks.py
+  docker --context desktop-linux compose -p $p down --volumes
+  ```
+- Checks, production, process и postgres-audit на HEAD нового PR ожидают публикации контроллером. Атомарность интервалов и аудита, ACL рабочих команд и полная TEN-01/AUD-01 через HTTPS открыты.
