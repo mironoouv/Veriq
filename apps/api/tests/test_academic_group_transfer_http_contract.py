@@ -1,21 +1,17 @@
 """Synthetic HTTP contract harness. It performs no authorization or database writes."""
 
-from collections.abc import Callable
 from uuid import UUID
 
 import pytest
 from fastapi import FastAPI, Request
-from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
-from starlette.responses import JSONResponse
 
 from veriq.academic_group_transfer_contract import (
     GroupTransferRequest,
     GroupTransferResult,
     TransferFailure,
-    parse_transfer_idempotency_key,
-    transfer_error_response,
 )
+from veriq.academic_group_transfer_http import TransferAdmission, create_transfer_router
 from veriq.auth_audit import RequestContext
 
 ORG, SOURCE, TARGET, KEY, CREATED, DIAGNOSTIC = (UUID(int=i) for i in range(101, 107))
@@ -30,41 +26,38 @@ HEADERS = {"Idempotency-Key": str(KEY)}
 def application(catalog_first: bool, failure: TransferFailure | None = None) -> FastAPI:
     app = FastAPI()
 
-    @app.exception_handler(RequestValidationError)
-    async def invalid(request: Request, error: RequestValidationError) -> JSONResponse:
-        return transfer_error_response(TransferFailure.VALIDATION_ERROR, CONTEXT)
+    async def check(
+        request: Request,
+        tenant: UUID,
+        payload: GroupTransferRequest,
+        context: RequestContext,
+    ) -> TransferAdmission | TransferFailure:
+        assert tenant == ORG
+        return TransferAdmission(ORG, SOURCE, TARGET)
 
-    async def transfer(
-        organization_id: UUID, payload: GroupTransferRequest, request: Request
-    ) -> JSONResponse:
-        try:
-            command_id = parse_transfer_idempotency_key(
-                request.headers.get("Idempotency-Key")
-            )
-        except ValueError:
-            return transfer_error_response(TransferFailure.VALIDATION_ERROR, CONTEXT)
-        assert organization_id == ORG and command_id == KEY
-        assert payload == GroupTransferRequest.model_validate(BODY)
-        if failure is not None:
-            return transfer_error_response(failure, CONTEXT)
-        result = GroupTransferResult(result="transferred", target_interval_id=CREATED)
-        return JSONResponse(
-            result.model_dump(mode="json"),
-            status_code=201,
-            headers={"Cache-Control": "no-store"},
+    async def execute(
+        admission: TransferAdmission,
+        payload: GroupTransferRequest,
+        command_id: UUID,
+        context: RequestContext,
+    ) -> GroupTransferResult | TransferFailure:
+        assert command_id == KEY and payload == GroupTransferRequest.model_validate(
+            BODY
         )
+        if failure is not None:
+            return failure
+        return GroupTransferResult(result="transferred", target_interval_id=CREATED)
 
     async def catalog(organization_id: UUID, kind: str) -> dict[str, str]:
         return {"handler": "catalog", "kind": kind}
 
-    handlers: list[tuple[str, Callable[..., object]]] = [
-        (PATH, transfer),
-        (CATALOG, catalog),
-    ]
     if catalog_first:
-        handlers.reverse()
-    for path, handler in handlers:
-        app.add_api_route(path, handler, methods=["POST"])
+        app.add_api_route(CATALOG, catalog, methods=["POST"])
+    app.include_router(
+        create_transfer_router(check_admission=check, execute=execute), prefix="/api/v1"
+    )
+    if not catalog_first:
+        app.add_api_route(CATALOG, catalog, methods=["POST"])
     return app
 
 
@@ -85,13 +78,19 @@ def test_success_and_route_independence(catalog_first: bool) -> None:
         assert catalog.json() == {"handler": "catalog", "kind": "study_groups"}
 
 
-def assert_error(response_status: int, body: object, expected: TransferFailure) -> None:
+def assert_error(
+    response_status: int, body: dict[str, object], expected: TransferFailure
+) -> None:
     assert response_status == expected.value[0]
+    error = body["error"]
+    assert isinstance(error, dict)
+    diagnostic = UUID(error["request_id"])
+    assert diagnostic != KEY
     assert body == {
         "error": {
             "code": expected.value[1],
             "message": "Transfer request could not be completed.",
-            "request_id": str(DIAGNOSTIC),
+            "request_id": str(diagnostic),
             "details": {},
         }
     }
@@ -140,3 +139,109 @@ def test_invalid_header(key: str | None) -> None:
         )
         assert response.headers["cache-control"] == "no-store"
         assert "synthetic-private-input" not in response.text
+
+
+@pytest.mark.parametrize("denial", list(TransferFailure))
+def test_admission_denial_never_executes(denial: TransferFailure) -> None:
+    async def check(
+        request: Request,
+        tenant: UUID,
+        payload: GroupTransferRequest,
+        context: RequestContext,
+    ) -> TransferAdmission | TransferFailure:
+        return denial
+
+    async def execute(
+        admission: TransferAdmission,
+        payload: GroupTransferRequest,
+        command_id: UUID,
+        context: RequestContext,
+    ) -> GroupTransferResult | TransferFailure:
+        pytest.fail("Command invoked after denial")
+
+    app = FastAPI()
+    app.include_router(
+        create_transfer_router(check_admission=check, execute=execute), prefix="/api/v1"
+    )
+    with TestClient(app) as client:
+        response = client.post(URL, json=BODY, headers=HEADERS)
+        assert_error(response.status_code, response.json(), denial)
+
+
+def test_dependencies_and_context() -> None:
+    calls: list[RequestContext] = []
+
+    async def check(
+        request: Request,
+        tenant: UUID,
+        payload: GroupTransferRequest,
+        context: RequestContext,
+    ) -> TransferAdmission | TransferFailure:
+        calls.append(context)
+        assert request.method == "POST" and tenant == ORG
+        assert payload == GroupTransferRequest.model_validate(BODY)
+        return TransferAdmission(ORG, SOURCE, TARGET)
+
+    async def execute(
+        admission: TransferAdmission,
+        payload: GroupTransferRequest,
+        command_id: UUID,
+        context: RequestContext,
+    ) -> GroupTransferResult | TransferFailure:
+        assert calls == [context]
+        assert admission == TransferAdmission(ORG, SOURCE, TARGET)
+        assert (
+            payload == GroupTransferRequest.model_validate(BODY) and command_id == KEY
+        )
+        calls.append(context)
+        return GroupTransferResult(result="transferred", target_interval_id=CREATED)
+
+    app = FastAPI()
+    app.include_router(
+        create_transfer_router(check_admission=check, execute=execute), prefix="/api/v1"
+    )
+    with TestClient(app) as client:
+        for payload, headers in (({}, HEADERS), (BODY, {})):
+            assert client.post(URL, json=payload, headers=headers).status_code == 422
+            assert calls == []
+        assert client.post(URL, json=BODY, headers=HEADERS).status_code == 201
+        assert len(calls) == 2
+
+
+@pytest.mark.parametrize("stage", ["admission", "command", "tenant"])
+def test_dependency_failure_is_redacted(stage: str) -> None:
+    commands: list[UUID] = []
+
+    async def check(
+        request: Request,
+        tenant: UUID,
+        payload: GroupTransferRequest,
+        context: RequestContext,
+    ) -> TransferAdmission | TransferFailure:
+        if stage == "admission":
+            raise RuntimeError("synthetic-secret")
+        return TransferAdmission(TARGET if stage == "tenant" else ORG, SOURCE, TARGET)
+
+    async def execute(
+        admission: TransferAdmission,
+        payload: GroupTransferRequest,
+        command_id: UUID,
+        context: RequestContext,
+    ) -> GroupTransferResult | TransferFailure:
+        commands.append(command_id)
+        raise RuntimeError("synthetic-secret")
+
+    app = FastAPI()
+    app.include_router(
+        create_transfer_router(check_admission=check, execute=execute), prefix="/api/v1"
+    )
+    with TestClient(app) as client:
+        response = client.post(URL, json=BODY, headers=HEADERS)
+        expected = (
+            TransferFailure.RESOURCE_NOT_FOUND
+            if stage == "tenant"
+            else TransferFailure.INTERNAL_ERROR
+        )
+        assert_error(response.status_code, response.json(), expected)
+        assert "synthetic-secret" not in response.text
+        assert commands == ([KEY] if stage == "command" else [])
