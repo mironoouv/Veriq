@@ -1,17 +1,26 @@
 """Synthetic HTTP contract harness. It performs no authorization or database writes."""
 
+from dataclasses import replace
 from uuid import UUID
 
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
+from veriq.academic_group_teacher_policy import Assignment, Caller, Group, Membership
 from veriq.academic_group_transfer_contract import (
     GroupTransferRequest,
     GroupTransferResult,
     TransferFailure,
 )
 from veriq.academic_group_transfer_http import TransferAdmission, create_transfer_router
+from veriq.academic_group_transfer_policy import (
+    TRANSFER,
+    GroupAccess,
+    SourceInterval,
+    TeacherAuthority,
+    classify_transfer,
+)
 from veriq.auth_audit import RequestContext
 from veriq.permissions import SessionGate
 from veriq.sessions import SessionPolicy
@@ -25,6 +34,116 @@ CONTEXT = RequestContext(DIAGNOSTIC, DIAGNOSTIC)
 PROOF = b"synthetic-session-proof-32-bytes!!"
 GATE = SessionGate(TARGET, PROOF, SessionPolicy().limits)
 HEADERS = {"Idempotency-Key": str(KEY)}
+
+
+@pytest.mark.parametrize("actor_role", ["org_admin", "teacher"])
+@pytest.mark.parametrize(
+    ("scenario", "status", "code"),
+    [
+        ("allowed", 201, None),
+        ("expired", 401, "SESSION_INVALID"),
+        ("stale_epoch", 404, "RESOURCE_NOT_FOUND"),
+        ("foreign_group", 404, "RESOURCE_NOT_FOUND"),
+        ("foreign_student", 404, "RESOURCE_NOT_FOUND"),
+        ("source_permission", 404, "RESOURCE_NOT_FOUND"),
+        ("target_permission", 404, "RESOURCE_NOT_FOUND"),
+        ("closed_initial", 404, "RESOURCE_NOT_FOUND"),
+        ("closed_after_access", 409, "TRANSFER_CONFLICT"),
+        ("archived", 409, "TRANSFER_CONFLICT"),
+        ("archived_denied", 404, "RESOURCE_NOT_FOUND"),
+    ],
+)
+def test_policy_drives_http(
+    actor_role: str, scenario: str, status: int, code: str | None
+) -> None:
+    actor_id, student_id, other = UUID(int=201), UUID(int=202), UUID(int=203)
+    permissions = frozenset({TRANSFER})
+    actor = Membership(ORG, actor_id, 3, True, frozenset({actor_role}))
+    caller = Caller(ORG, actor_id, 3, True, actor, permissions)
+    student = Membership(ORG, student_id, 1, True, frozenset({"student"}))
+    source = GroupAccess(
+        Group(ORG, SOURCE, True),
+        permissions,
+        TeacherAuthority(Assignment(ORG, SOURCE, actor_id, False), 3),
+    )
+    target = GroupAccess(
+        Group(ORG, TARGET, True),
+        permissions,
+        TeacherAuthority(Assignment(ORG, TARGET, actor_id, False), 3),
+    )
+    interval = SourceInterval(ORG, SOURCE, student_id, True)
+    if scenario == "expired":
+        caller = replace(caller, session_current=False)
+    if scenario == "stale_epoch":
+        caller = replace(caller, grant_epoch=2)
+    if scenario == "foreign_group":
+        target = replace(target, group=replace(target.group, organization_id=other))
+    if scenario == "foreign_student":
+        student = replace(student, organization_id=other)
+    if scenario == "source_permission":
+        source = replace(source, permissions=frozenset())
+    if scenario == "target_permission":
+        target = replace(target, permissions=frozenset())
+    if scenario.startswith("closed"):
+        interval = replace(interval, open=False)
+    if scenario.startswith("archived"):
+        target = replace(target, group=replace(target.group, active=False))
+    if scenario == "archived_denied":
+        target = replace(target, permissions=frozenset())
+    calls: list[UUID] = []
+
+    async def check(
+        request: Request,
+        tenant: UUID,
+        payload: GroupTransferRequest,
+        context: RequestContext,
+    ) -> TransferAdmission:
+        return TransferAdmission(ORG, actor_id, GATE)
+
+    async def command(
+        admission: TransferAdmission,
+        payload: GroupTransferRequest,
+        command_id: UUID,
+        context: RequestContext,
+    ) -> GroupTransferResult | TransferFailure:
+        assert admission.actor_id == actor_id and admission.session_gate is GATE
+        assert command_id == KEY and payload == GroupTransferRequest.model_validate(
+            BODY
+        )
+        calls.append(command_id)
+        failure = classify_transfer(
+            caller,
+            source,
+            target,
+            student,
+            interval,
+            access_previously_confirmed=scenario == "closed_after_access",
+        )
+        return (
+            failure
+            if failure is not None
+            else GroupTransferResult(result="transferred", target_interval_id=CREATED)
+        )
+
+    app = FastAPI()
+    app.include_router(
+        create_transfer_router(check_admission=check, execute=command), prefix="/api/v1"
+    )
+    with TestClient(app) as client:
+        response = client.post(URL, json=BODY, headers=HEADERS)
+    assert calls == [KEY]
+    assert response.status_code == status
+    assert response.headers["cache-control"] == "no-store"
+    if code is None:
+        assert response.json() == {
+            "result": "transferred",
+            "target_interval_id": str(CREATED),
+        }
+    else:
+        assert_error(status, response.json(), TransferFailure[code])
+    for hidden in (actor_id, student_id, other, KEY):
+        assert str(hidden) not in response.text
+    assert PROOF.decode() not in response.text and PROOF.hex() not in response.text
 
 
 def test_openapi_contract() -> None:
