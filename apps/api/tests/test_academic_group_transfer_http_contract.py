@@ -1,11 +1,15 @@
 """Synthetic HTTP contract harness. It performs no authorization or database writes."""
 
 from dataclasses import replace
+from unittest.mock import Mock
 from uuid import UUID
 
 import pytest
 from fastapi import FastAPI, Request
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from redis.asyncio import Redis
+from sqlalchemy import create_engine
 
 from veriq.academic_group_teacher_policy import Assignment, Caller, Group, Membership
 from veriq.academic_group_transfer_contract import (
@@ -22,6 +26,8 @@ from veriq.academic_group_transfer_policy import (
     classify_transfer,
 )
 from veriq.auth_audit import RequestContext
+from veriq.browser_login import browser_router
+from veriq.main import create_app
 from veriq.permissions import SessionGate
 from veriq.sessions import SessionPolicy
 
@@ -34,6 +40,60 @@ CONTEXT = RequestContext(DIAGNOSTIC, DIAGNOSTIC)
 PROOF = b"synthetic-session-proof-32-bytes!!"
 GATE = SessionGate(TARGET, PROOF, SessionPolicy().limits)
 HEADERS = {"Idempotency-Key": str(KEY)}
+
+
+@pytest.mark.parametrize("browser_enabled", [False, True])
+def test_working_build_does_not_register_transfer(
+    monkeypatch: pytest.MonkeyPatch, browser_enabled: bool
+) -> None:
+    from veriq import main
+
+    settings = {
+        "VERIQ_ENV": "test",
+        "VERIQ_ENABLE_TEST_LOGIN": "1" if browser_enabled else "0",
+        "VERIQ_ENABLE_TEST_ACADEMIC_CATALOG": "1",
+        "VERIQ_ENABLE_TEST_MFA": "0",
+        "VERIQ_TEST_LOGIN_ORIGIN": "https://synthetic.invalid",
+        "VERIQ_TEST_CSRF_KEY": "11" * 32,
+        "VERIQ_TEST_AUTH_HMAC_KEY": "22" * 32,
+        "VERIQ_TEST_LOGIN_VERIFIER_PASSWORD": "synthetic-verifier",
+        "VERIQ_TEST_LOGIN_ISSUER_PASSWORD": "synthetic-issuer",
+    }
+    for name, value in settings.items():
+        monkeypatch.setenv(name, value)
+    # Only connection providers are replaced. Route factories remain the real ones.
+    engine = create_engine("sqlite://")
+    cache = Mock(spec=Redis)
+    monkeypatch.setattr(main, "create_redis", lambda: cache)
+    monkeypatch.setattr(main, "database_url", lambda: engine.url)
+    monkeypatch.setattr(main, "create_database_engine", lambda url=None: engine)
+    try:
+        router = browser_router(engine, cache, engine, engine)
+        browser_paths = {
+            route.path for route in router.routes if isinstance(route, APIRoute)
+        }
+        assert any(path.endswith("/academic/{kind}") for path in browser_paths)
+        assert not any("academic-roster" in path for path in browser_paths)
+        app = create_app(engine=engine, enable_docs=True)
+        with TestClient(app) as client:
+            schema = client.get("/api/v1/openapi.json").json()
+            assert client.get("/api/v1/health/live").status_code == 200
+            assert client.post(URL, json=BODY, headers=HEADERS).status_code == 404
+        paths = schema["paths"]
+        assert "/api/v1/health/live" in paths
+        catalog_path = CATALOG
+        assert (catalog_path in paths) is browser_enabled
+        if browser_enabled:
+            assert {"get", "post"} <= set(paths[catalog_path])
+        assert PATH not in paths
+        assert not any("academic-roster" in path for path in paths)
+        assert not any(
+            "academic-roster" in route.path
+            for route in app.routes
+            if isinstance(route, APIRoute)
+        )
+    finally:
+        engine.dispose()
 
 
 @pytest.mark.parametrize("actor_role", ["org_admin", "teacher"])
