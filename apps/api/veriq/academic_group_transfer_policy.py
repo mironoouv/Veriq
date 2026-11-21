@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from veriq.academic_group_teacher_policy import Assignment, Caller, Group, Membership
+from veriq.academic_group_transfer_contract import TransferFailure
 from veriq.tenant_access import AccessDenied
 
 TRANSFER = "academic.roster.transfer"
@@ -48,14 +49,18 @@ def _can_transfer(actor: Membership, access: GroupAccess) -> bool:
     )
 
 
-def authorize_transfer(
+def classify_transfer(
     caller: Caller,
     source: GroupAccess,
     destination: GroupAccess,
     student: Membership,
     interval: SourceInterval,
-) -> None:
-    """Check eligibility without writing intervals or issuing permissions."""
+    *,
+    access_previously_confirmed: bool = False,
+) -> TransferFailure | None:
+    """Classify trusted snapshots without writing or issuing permissions."""
+    if not caller.session_current:
+        return TransferFailure.SESSION_INVALID
     actor = caller.membership
     if not (
         caller.session_current
@@ -68,9 +73,6 @@ def authorize_transfer(
         == destination.group.organization_id
         == student.organization_id
         == interval.organization_id
-        and source.group.id != destination.group.id
-        and destination.group.active
-        and interval.open
         and interval.group_id == source.group.id
         and interval.membership_id == student.id
         and student.active
@@ -79,4 +81,25 @@ def authorize_transfer(
         and _can_transfer(actor, source)
         and _can_transfer(actor, destination)
     ):
+        return TransferFailure.RESOURCE_NOT_FOUND
+    if not interval.open:
+        return (
+            TransferFailure.TRANSFER_CONFLICT
+            if access_previously_confirmed
+            else TransferFailure.RESOURCE_NOT_FOUND
+        )
+    if source.group.id == destination.group.id or not destination.group.active:
+        return TransferFailure.TRANSFER_CONFLICT
+    return None
+
+
+def authorize_transfer(
+    caller: Caller,
+    source: GroupAccess,
+    destination: GroupAccess,
+    student: Membership,
+    interval: SourceInterval,
+) -> None:
+    """Preserve the original all-or-denied interface."""
+    if classify_transfer(caller, source, destination, student, interval) is not None:
         raise AccessDenied("Student transfer denied")
