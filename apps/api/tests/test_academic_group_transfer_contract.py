@@ -1,3 +1,5 @@
+import inspect
+import json
 from uuid import UUID
 
 import pytest
@@ -6,10 +8,55 @@ from pydantic import ValidationError
 from veriq.academic_group_transfer_contract import (
     GroupTransferRequest,
     GroupTransferResult,
+    TransferFailure,
     parse_transfer_idempotency_key,
+    transfer_error_response,
 )
+from veriq.auth_audit import RequestContext
 
 SOURCE, TARGET = UUID(int=101), UUID(int=102)
+
+
+@pytest.mark.parametrize(
+    ("failure", "status", "code"),
+    [
+        (TransferFailure.SESSION_INVALID, 401, "SESSION_INVALID"),
+        (TransferFailure.RESOURCE_NOT_FOUND, 404, "RESOURCE_NOT_FOUND"),
+        (TransferFailure.CSRF_DENIED, 403, "CSRF_DENIED"),
+        (TransferFailure.VALIDATION_ERROR, 422, "VALIDATION_ERROR"),
+        (TransferFailure.TRANSFER_CONFLICT, 409, "TRANSFER_CONFLICT"),
+        (TransferFailure.INTERNAL_ERROR, 500, "INTERNAL_ERROR"),
+    ],
+)
+def test_error_response(failure: TransferFailure, status: int, code: str) -> None:
+    response = transfer_error_response(failure, RequestContext(SOURCE, TARGET))
+    assert response.status_code == status
+    assert response.headers["cache-control"] == "no-store"
+    assert json.loads(bytes(response.body)) == {
+        "error": {
+            "code": code,
+            "message": "Transfer request could not be completed.",
+            "request_id": str(SOURCE),
+            "details": {},
+        }
+    }
+    assert str(TARGET) not in bytes(response.body).decode()
+
+
+def test_error_input_boundary() -> None:
+    assert set(inspect.signature(transfer_error_response).parameters) == {
+        "failure",
+        "context",
+    }
+    assert len(TransferFailure) == 6
+    context = RequestContext(SOURCE, TARGET)
+    # All hidden-resource reasons use this single category after server classification.
+    first = transfer_error_response(TransferFailure.RESOURCE_NOT_FOUND, context)
+    second = transfer_error_response(TransferFailure.RESOURCE_NOT_FOUND, context)
+    assert first.body == second.body
+    assert not {"exception", "token", "digest", "resource_id"} & set(
+        json.loads(bytes(first.body))["error"]
+    )
 
 
 def test_command_key() -> None:
