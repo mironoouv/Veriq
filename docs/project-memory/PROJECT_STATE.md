@@ -203,6 +203,21 @@
   - postgres-audit — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43740093571)
 - Для рабочей команды открыты доверенное происхождение и восстановление tenant-контекста, эффективный EXECUTE, отсутствие чужой блокировки, транзакционная авторизация, рабочий аудит и приёмка TEN-01/AUD-01 через HTTPS.
 
+## Academic & Studio Slice 2 — модель EXECUTE цепочки перевода
+
+- В отдельном Compose-проекте `veriq-execute-dbb2d172` на мигрированной PostgreSQL 17.11 прошла проверка четырёх тестовых SECURITY DEFINER-функций и пяти NOLOGIN-ролей. Проверены эффективные EXECUTE по полным сигнатурам, отсутствие PUBLIC EXECUTE, ожидаемые владельцы и последовательность вложенных переходов команды к сессионному помощнику и помощнику аккаунтов, затем к внутреннему чтению сессии. API-аналог вызывает только команду, worker-аналог получает 42501 для всех функций. Прямые вызовы помощников из неподходящих ролей возвращают 42501. Владельцы сохраняют собственный EXECUTE.
+- Для повтора из корня задать разные временные синтетические значения `VERIQ_DB_PASSWORD`, `VERIQ_API_DB_PASSWORD` и `VERIQ_WORKER_DB_PASSWORD`:
+  ```powershell
+  docker --context desktop-linux info
+  $p = 'veriq-execute-' + [guid]::NewGuid().ToString('N').Substring(0,8)
+  docker --context desktop-linux compose -p $p up -d --wait postgres
+  docker --context desktop-linux compose -p $p run --build --rm --no-deps -T migrate
+  docker --context desktop-linux compose -p $p run --rm --no-deps -T -e PYTHONPATH=/app -v "${PWD}/tests:/fixtures:ro" migrate python /fixtures/academic_slice2_transfer_execute_acl_checks.py
+  docker --context desktop-linux compose -p $p down --volumes
+  ```
+- Проверенный локальный исходный SHA — `9c3ff7510e8d46a82cdd181bc707d1576c2b3403` с правками этого шага. Результаты checks, production, process и postgres-audit на будущем HEAD PR требуют отдельной сверки после публикации контроллером.
+- Подтверждена модель прав на тестовых функциях, возвращающих синтетические маркеры ролей. Рабочие функции остаются PROPOSED. Открыты их эффективные права, доверенное происхождение и восстановление tenant-контекста, отсутствие чужой блокировки, транзакционная авторизация, рабочий аудит и HTTPS-приёмка TEN-01/AUD-01. SEC-MFA-01 — OPEN. Public Auth — NOT READY. Риск прежних полномочий доверенной SQL-роли сохраняется.
+
 ## Academic & Studio Slice 2 — восстановление tenant-контекста
 
 - PostgreSQL 17.11, Compose-проект `veriq-context-7f0df431`, база мигрирована из `14fd4ab2f6ea439a41896370602528f47bc779ec`. Тестовый вызывающий подставляет доверенный tenant A. Функциональный SET очистил входной GUC, а локальный A открыл под FORCE RLS только строки состава и членства A. В той же транзакции исходные B и пустой GUC восстановились после возврата и после SQLSTATE P7501 с откатом до точки сохранения.
