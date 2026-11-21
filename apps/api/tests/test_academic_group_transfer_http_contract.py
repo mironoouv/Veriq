@@ -13,6 +13,8 @@ from veriq.academic_group_transfer_contract import (
 )
 from veriq.academic_group_transfer_http import TransferAdmission, create_transfer_router
 from veriq.auth_audit import RequestContext
+from veriq.permissions import SessionGate
+from veriq.sessions import SessionPolicy
 
 ORG, SOURCE, TARGET, KEY, CREATED, DIAGNOSTIC = (UUID(int=i) for i in range(101, 107))
 PATH = "/api/v1/organizations/{organization_id}/academic-roster/transfers"
@@ -20,6 +22,8 @@ CATALOG = "/api/v1/organizations/{organization_id}/academic/{kind}"
 URL = PATH.format(organization_id=ORG)
 BODY = {"source_interval_id": str(SOURCE), "target_group_id": str(TARGET)}
 CONTEXT = RequestContext(DIAGNOSTIC, DIAGNOSTIC)
+PROOF = b"synthetic-session-proof-32-bytes!!"
+GATE = SessionGate(TARGET, PROOF, SessionPolicy().limits)
 HEADERS = {"Idempotency-Key": str(KEY)}
 
 
@@ -33,7 +37,7 @@ def application(catalog_first: bool, failure: TransferFailure | None = None) -> 
         context: RequestContext,
     ) -> TransferAdmission | TransferFailure:
         assert tenant == ORG
-        return TransferAdmission(ORG, SOURCE, TARGET)
+        return TransferAdmission(ORG, SOURCE, GATE)
 
     async def execute(
         admission: TransferAdmission,
@@ -66,6 +70,8 @@ def test_success_and_route_independence(catalog_first: bool) -> None:
     with TestClient(application(catalog_first)) as client:
         response = client.post(URL, json=BODY, headers=HEADERS)
         assert response.status_code == 201
+        assert PROOF.decode() not in response.text
+        assert PROOF.hex() not in response.text
         assert response.headers["cache-control"] == "no-store"
         assert response.json() == {
             "result": "transferred",
@@ -104,6 +110,8 @@ def test_synthetic_failures(failure: TransferFailure) -> None:
         assert response.headers["cache-control"] == "no-store"
         for hidden in (SOURCE, TARGET, KEY, ORG):
             assert str(hidden) not in response.text
+        assert PROOF.decode() not in response.text
+        assert PROOF.hex() not in response.text
 
 
 @pytest.mark.parametrize(
@@ -180,7 +188,7 @@ def test_dependencies_and_context() -> None:
         calls.append(context)
         assert request.method == "POST" and tenant == ORG
         assert payload == GroupTransferRequest.model_validate(BODY)
-        return TransferAdmission(ORG, SOURCE, TARGET)
+        return TransferAdmission(ORG, SOURCE, GATE)
 
     async def execute(
         admission: TransferAdmission,
@@ -189,7 +197,9 @@ def test_dependencies_and_context() -> None:
         context: RequestContext,
     ) -> GroupTransferResult | TransferFailure:
         assert calls == [context]
-        assert admission == TransferAdmission(ORG, SOURCE, TARGET)
+        assert admission == TransferAdmission(ORG, SOURCE, GATE)
+        assert admission.session_gate is GATE
+        assert admission.session_gate.digest == PROOF
         assert (
             payload == GroupTransferRequest.model_validate(BODY) and command_id == KEY
         )
@@ -208,6 +218,13 @@ def test_dependencies_and_context() -> None:
         assert len(calls) == 2
 
 
+def test_admission_representation_hides_proof() -> None:
+    admission = TransferAdmission(ORG, SOURCE, GATE)
+    for representation in (repr(admission), str(admission), repr(GATE)):
+        assert PROOF.decode() not in representation
+        assert PROOF.hex() not in representation
+
+
 @pytest.mark.parametrize("stage", ["admission", "command", "tenant"])
 def test_dependency_failure_is_redacted(stage: str) -> None:
     commands: list[UUID] = []
@@ -220,7 +237,7 @@ def test_dependency_failure_is_redacted(stage: str) -> None:
     ) -> TransferAdmission | TransferFailure:
         if stage == "admission":
             raise RuntimeError("synthetic-secret")
-        return TransferAdmission(TARGET if stage == "tenant" else ORG, SOURCE, TARGET)
+        return TransferAdmission(TARGET if stage == "tenant" else ORG, SOURCE, GATE)
 
     async def execute(
         admission: TransferAdmission,

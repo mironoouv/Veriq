@@ -1,7 +1,7 @@
 """Isolated transfer adapter. Working application registration requires approval."""
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from json import JSONDecodeError
 from uuid import UUID
 
@@ -17,6 +17,7 @@ from veriq.academic_group_transfer_contract import (
     transfer_error_response,
 )
 from veriq.auth_audit import RequestContext
+from veriq.permissions import SessionGate
 
 
 @dataclass(frozen=True)
@@ -25,7 +26,7 @@ class TransferAdmission:
 
     organization_id: UUID
     actor_id: UUID
-    session_id: UUID
+    session_gate: SessionGate = field(repr=False)
 
 
 AdmissionCheck = Callable[
