@@ -215,7 +215,12 @@
   docker --context desktop-linux compose -p $p run --rm --no-deps -T -e PYTHONPATH=/app -v "${PWD}/tests:/fixtures:ro" migrate python /fixtures/academic_slice2_transfer_execute_acl_checks.py
   docker --context desktop-linux compose -p $p down --volumes
   ```
-- Проверенный локальный исходный SHA — `9c3ff7510e8d46a82cdd181bc707d1576c2b3403` с правками этого шага. Результаты checks, production, process и postgres-audit на будущем HEAD PR требуют отдельной сверки после публикации контроллером.
+- Проверенный локальный исходный SHA — `9c3ff7510e8d46a82cdd181bc707d1576c2b3403` с правками этого шага.
+- CI на проверенном HEAD PR #59 `1cb77f2c0a36a0b868228ad00c6e0cd64c0b191f`:
+  - checks — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/44880672694)
+  - production — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/44880672694)
+  - process — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/44880672665)
+  - postgres-audit — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/44880672686)
 - Подтверждена модель прав на тестовых функциях, возвращающих синтетические маркеры ролей. Рабочие функции остаются PROPOSED. Открыты их эффективные права, доверенное происхождение и восстановление tenant-контекста, отсутствие чужой блокировки, транзакционная авторизация, рабочий аудит и HTTPS-приёмка TEN-01/AUD-01. SEC-MFA-01 — OPEN. Public Auth — NOT READY. Риск прежних полномочий доверенной SQL-роли сохраняется.
 
 ## Academic & Studio Slice 2 — восстановление tenant-контекста
