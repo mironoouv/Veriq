@@ -6,9 +6,24 @@ from pydantic import ValidationError
 from veriq.academic_group_transfer_contract import (
     GroupTransferRequest,
     GroupTransferResult,
+    parse_transfer_idempotency_key,
 )
 
 SOURCE, TARGET = UUID(int=101), UUID(int=102)
+
+
+def test_command_key() -> None:
+    assert parse_transfer_idempotency_key(str(SOURCE)) == SOURCE
+    assert parse_transfer_idempotency_key(str(SOURCE).upper()) == SOURCE
+
+
+@pytest.mark.parametrize(
+    "value", [None, "", " ", "invalid", "123", str(SOURCE) + ", " + str(TARGET)]
+)
+def test_invalid_command_key(value: str | None) -> None:
+    with pytest.raises(ValueError) as error:
+        parse_transfer_idempotency_key(value)
+    assert str(error.value) == "Idempotency-Key must be a UUID"
 
 
 def test_valid_request() -> None:
