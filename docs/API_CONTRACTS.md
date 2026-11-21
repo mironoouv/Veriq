@@ -183,6 +183,8 @@ Archived lists include can_restore for rendering the action.
 
 ## Academic Slice 2 — перевод студента, PROPOSED
 
+Ревьюер в авторежиме утвердил редакцию этого раздела main `0c85d2769b86a344367446e90d681be6c9d8fed6` только для автономной реализации Pydantic-моделей запроса и результата и их модульных тестов. Модели находятся в `apps/api/veriq/academic_group_transfer_contract.py`. Подключение маршрута и рабочей команды требует отдельного решения, маршрут остаётся PROPOSED.
+
 Проект маршрута `POST /organizations/{organization_id}/academic-roster/transfers` относителен к общей базе /api/v1. Контракт согласован с [проектом транзакции Slice 2](../planning/ACADEMIC_STUDIO.md). Реализация маршрута и рабочей команды требует отдельного архитектурного ревью и допуска.
 
 Запрос использует существующую browser cookie, Origin и CSRF-проверки. Обязателен заголовок `Idempotency-Key` с UUID команды. Тело JSON содержит ровно два обязательных UUID-поля:
