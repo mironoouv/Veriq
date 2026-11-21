@@ -1,15 +1,25 @@
+from dataclasses import replace
 from uuid import UUID
 
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
+from veriq.academic_group_teacher_policy import Assignment, Caller, Group, Membership
 from veriq.academic_group_transfer_admission import create_transfer_admission
 from veriq.academic_group_transfer_contract import (
     GroupTransferRequest,
     GroupTransferResult,
+    TransferFailure,
 )
 from veriq.academic_group_transfer_http import TransferAdmission, create_transfer_router
+from veriq.academic_group_transfer_policy import (
+    TRANSFER,
+    GroupAccess,
+    SourceInterval,
+    TeacherAuthority,
+    classify_transfer,
+)
 from veriq.auth_audit import RequestContext
 from veriq.sessions import (
     MfaLevel,
@@ -110,5 +120,135 @@ def test_admission(
     if code is not None:
         assert response.json()["error"]["code"] == code
         assert response.json()["error"]["details"] == {}
+    assert TOKEN.value not in response.text
+    assert TOKEN._gate(sessions.policy).digest.hex() not in response.text
+
+
+@pytest.mark.parametrize("actor_role", ["org_admin", "teacher"])
+@pytest.mark.parametrize(
+    ("scenario", "status", "code", "command_calls"),
+    [
+        ("success", 201, None, 1),
+        ("csrf", 403, "CSRF_DENIED", 0),
+        ("session", 401, "SESSION_INVALID", 0),
+        ("tenant", 404, "RESOURCE_NOT_FOUND", 0),
+        ("no_tenant", 404, "RESOURCE_NOT_FOUND", 0),
+        ("source_permission", 404, "RESOURCE_NOT_FOUND", 1),
+        ("target_permission", 404, "RESOURCE_NOT_FOUND", 1),
+        ("foreign_student", 404, "RESOURCE_NOT_FOUND", 1),
+        ("archived", 409, "TRANSFER_CONFLICT", 1),
+        ("closed_initial", 404, "RESOURCE_NOT_FOUND", 1),
+        ("closed_after_access", 409, "TRANSFER_CONFLICT", 1),
+        ("revoked_after_admission", 401, "SESSION_INVALID", 1),
+    ],
+)
+def test_admission_adapter_and_policy(
+    actor_role: str, scenario: str, status: int, code: str | None, command_calls: int
+) -> None:
+    tenant = None if scenario == "no_tenant" else OTHER if scenario == "tenant" else ORG
+    sessions = SyntheticSessions(tenant, scenario == "session")
+    executed: list[UUID] = []
+    student_id, created = UUID(int=101), UUID(int=102)
+
+    def guard(request: Request) -> bool:
+        return scenario != "csrf"
+
+    async def command(
+        admission: TransferAdmission,
+        payload: GroupTransferRequest,
+        command_id: UUID,
+        context: RequestContext,
+    ) -> GroupTransferResult | TransferFailure:
+        assert admission.actor_id == ACTOR and admission.organization_id == ORG
+        assert admission.session_gate == TOKEN._gate(sessions.policy)
+        assert (
+            payload == GroupTransferRequest.model_validate(BODY) and command_id == KEY
+        )
+        assert context.request_id != command_id
+        executed.append(command_id)
+        permissions = frozenset({TRANSFER})
+        actor = Membership(
+            admission.organization_id,
+            admission.actor_id,
+            3,
+            True,
+            frozenset({actor_role}),
+        )
+        caller = Caller(
+            admission.organization_id,
+            actor.id,
+            actor.grant_epoch,
+            scenario != "revoked_after_admission",
+            actor,
+            permissions,
+        )
+        source = GroupAccess(
+            Group(ORG, SOURCE, True),
+            permissions,
+            TeacherAuthority(Assignment(ORG, SOURCE, actor.id, False), 3),
+        )
+        target = GroupAccess(
+            Group(ORG, payload.target_group_id, scenario != "archived"),
+            permissions,
+            TeacherAuthority(Assignment(ORG, TARGET, actor.id, False), 3),
+        )
+        if scenario == "source_permission":
+            source = replace(source, permissions=frozenset())
+        if scenario == "target_permission":
+            target = replace(target, permissions=frozenset())
+        student = Membership(
+            OTHER if scenario == "foreign_student" else ORG,
+            student_id,
+            1,
+            True,
+            frozenset({"student"}),
+        )
+        interval = SourceInterval(
+            ORG, SOURCE, student_id, not scenario.startswith("closed")
+        )
+        failure = classify_transfer(
+            caller,
+            source,
+            target,
+            student,
+            interval,
+            access_previously_confirmed=scenario == "closed_after_access",
+        )
+        return (
+            failure
+            if failure is not None
+            else GroupTransferResult(result="transferred", target_interval_id=created)
+        )
+
+    app = FastAPI()
+    app.include_router(
+        create_transfer_router(
+            check_admission=create_transfer_admission(
+                sessions=sessions, origin_csrf_valid=guard
+            ),
+            execute=command,
+        ),
+        prefix="/api/v1",
+    )
+    with TestClient(app, base_url="https://synthetic.invalid") as client:
+        client.cookies.set("__Host-veriq-session", TOKEN.value)
+        response = client.post(URL, json=BODY, headers={"Idempotency-Key": str(KEY)})
+    assert response.status_code == status
+    assert response.headers["cache-control"] == "no-store"
+    assert len(executed) == command_calls
+    assert sessions.calls == (0 if scenario == "csrf" else 1)
+    if code is None:
+        assert response.json() == {
+            "result": "transferred",
+            "target_interval_id": str(created),
+        }
+    else:
+        error = response.json()["error"]
+        assert set(error) == {"code", "message", "request_id", "details"}
+        assert error["code"] == code and error["details"] == {}
+        assert UUID(error["request_id"]) != KEY
+        assert error["message"] == "Transfer request could not be completed."
+    for hidden in (ACTOR, student_id, OTHER, KEY):
+        assert str(hidden) not in response.text
     assert TOKEN.value not in response.text
     assert TOKEN._gate(sessions.policy).digest.hex() not in response.text
