@@ -3,9 +3,10 @@
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from json import JSONDecodeError
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Path, Request
 from pydantic import ValidationError
 from starlette.responses import JSONResponse
 
@@ -38,14 +39,99 @@ TransferCommand = Callable[
     Awaitable[GroupTransferResult | TransferFailure],
 ]
 
+NO_STORE = {
+    "Cache-Control": {
+        "description": "Responses must not be stored.",
+        "schema": {"type": "string", "const": "no-store"},
+    }
+}
+
 
 def create_transfer_router(
     *, check_admission: AdmissionCheck, execute: TransferCommand
 ) -> APIRouter:
     router = APIRouter()
 
-    @router.post("/organizations/{organization_id}/academic-roster/transfers")
-    async def transfer(request: Request, organization_id: str) -> JSONResponse:
+    @router.post(
+        "/organizations/{organization_id}/academic-roster/transfers",
+        status_code=201,
+        response_model=GroupTransferResult,
+        description=(
+            "PROPOSED isolated adapter. Requires the existing browser session cookie "
+            "and server Origin/CSRF validation. Tenant must match the verified session. "
+            "Every response uses Cache-Control: no-store."
+        ),
+        responses={
+            201: {"description": "Transfer committed.", "headers": NO_STORE},
+            **{
+                status: {
+                    "description": code,
+                    "headers": NO_STORE,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["error"],
+                                "additionalProperties": False,
+                                "properties": {
+                                    "error": {
+                                        "type": "object",
+                                        "required": [
+                                            "code",
+                                            "message",
+                                            "request_id",
+                                            "details",
+                                        ],
+                                        "additionalProperties": False,
+                                        "properties": {
+                                            "code": {"type": "string", "const": code},
+                                            "message": {
+                                                "type": "string",
+                                                "const": "Transfer request could not be completed.",
+                                            },
+                                            "request_id": {
+                                                "type": "string",
+                                                "format": "uuid",
+                                            },
+                                            "details": {
+                                                "type": "object",
+                                                "properties": {},
+                                                "additionalProperties": False,
+                                            },
+                                        },
+                                    }
+                                },
+                            }
+                        }
+                    },
+                }
+                for status, code in (failure.value for failure in TransferFailure)
+            },
+        },
+        openapi_extra={
+            "parameters": [
+                {
+                    "name": "Idempotency-Key",
+                    "in": "header",
+                    "required": True,
+                    "schema": {"type": "string", "format": "uuid"},
+                    "description": "Command UUID, distinct from the diagnostic request_id.",
+                }
+            ],
+            "requestBody": {
+                "required": True,
+                "content": {
+                    "application/json": {
+                        "schema": GroupTransferRequest.model_json_schema()
+                    }
+                },
+            },
+        },
+    )
+    async def transfer(
+        request: Request,
+        organization_id: Annotated[str, Path(json_schema_extra={"format": "uuid"})],
+    ) -> JSONResponse:
         context = RequestContext.new()
         try:
             tenant = UUID(organization_id)

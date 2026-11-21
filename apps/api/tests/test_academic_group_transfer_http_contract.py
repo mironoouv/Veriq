@@ -27,6 +27,56 @@ GATE = SessionGate(TARGET, PROOF, SessionPolicy().limits)
 HEADERS = {"Idempotency-Key": str(KEY)}
 
 
+def test_openapi_contract() -> None:
+    with TestClient(application(False)) as client:
+        schema = client.get("/openapi.json").json()
+    operation = schema["paths"][PATH]["post"]
+    assert set(operation["responses"]) == {
+        "201",
+        "401",
+        "403",
+        "404",
+        "409",
+        "422",
+        "500",
+    }
+    parameters = operation["parameters"]
+    assert len(parameters) == 2
+    header = next(p for p in parameters if p["in"] == "header")
+    assert header["name"] == "Idempotency-Key" and header["required"] is True
+    assert header["schema"] == {"type": "string", "format": "uuid"}
+    path = next(p for p in parameters if p["in"] == "path")
+    assert path["required"] is True and path["schema"]["format"] == "uuid"
+    request = operation["requestBody"]
+    assert request["required"] is True
+    assert (
+        request["content"]["application/json"]["schema"]
+        == GroupTransferRequest.model_json_schema()
+    )
+    success = operation["responses"]["201"]["content"]["application/json"]["schema"]
+    assert schema["components"]["schemas"][success["$ref"].split("/")[-1]] == (
+        GroupTransferResult.model_json_schema()
+    )
+    for failure in TransferFailure:
+        status, code = failure.value
+        response = operation["responses"][str(status)]
+        envelope = response["content"]["application/json"]["schema"]
+        assert (
+            envelope["required"] == ["error"]
+            and envelope["additionalProperties"] is False
+        )
+        error = envelope["properties"]["error"]
+        assert set(error["required"]) == {"code", "message", "request_id", "details"}
+        assert set(error["properties"]) == set(error["required"])
+        assert error["additionalProperties"] is False
+        assert error["properties"]["code"]["const"] == code
+        assert error["properties"]["request_id"]["format"] == "uuid"
+        assert error["properties"]["details"]["additionalProperties"] is False
+    for response in operation["responses"].values():
+        assert response["headers"]["Cache-Control"]["schema"]["const"] == "no-store"
+    assert "Origin/CSRF" in operation["description"]
+
+
 def application(catalog_first: bool, failure: TransferFailure | None = None) -> FastAPI:
     app = FastAPI()
 
