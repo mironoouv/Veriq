@@ -163,6 +163,30 @@
 
 - PROPOSED: доказательство связывается с аккаунтом, tenant и эпохой до выбора ключей; привязка и действительность перепроверяются под блокировками перед записью. Открыты эффективный EXECUTE, транзакционная авторизация, рабочий аудит и HTTPS-приёмка TEN-01/AUD-01. Реализация требует отдельного допуска. SEC-MFA-01 — OPEN. Public Auth — NOT READY.
 
+## Academic & Studio Slice 2 — повторная проверка сессии
+
+- В изолированном Compose-проекте `veriq-session-recheck-768adb25` на PostgreSQL 17.11 с актуальными миграциями действующая роль `veriq_session_store` подтвердила одинаковую привязку при двух чтениях. Штатная ротация через независимое соединение открыла сессию в tenant B и сделала прежнюю привязку A недействительной. Отдельная сессия истекла по `clock_timestamp()` после начала транзакции и не прошла повторную проверку. Снимки состава A/B с отдельного соединения совпали.
+- Для повтора из корня задать разные временные синтетические значения `VERIQ_DB_PASSWORD`, `VERIQ_API_DB_PASSWORD` и `VERIQ_WORKER_DB_PASSWORD`. Использовать одноразовый проект:
+  ```powershell
+  docker --context desktop-linux info
+  $p = 'veriq-session-recheck-' + [guid]::NewGuid().ToString('N').Substring(0,8)
+  docker --context desktop-linux compose -p $p up -d --wait postgres
+  docker --context desktop-linux compose -p $p run --build --rm --no-deps -T migrate
+  docker --context desktop-linux compose -p $p run --rm --no-deps -T -e PYTHONPATH=/app -v "${PWD}/tests:/fixtures:ro" migrate python /fixtures/academic_slice2_session_recheck_checks.py
+  docker --context desktop-linux compose -p $p down --volumes
+  ```
+- Проверена сессионная предпосылка TEN-01 в пределах допуска ревьюера. Эффективный EXECUTE будущих функций, FORCE RLS состава, полная транзакционная авторизация, рабочий аудит и приёмка TEN-01/AUD-01 через HTTPS открыты. SEC-MFA-01 — OPEN. Public Auth — NOT READY. Риск прежних полномочий доверенной SQL-роли сохраняется.
+- CI на проверенном HEAD PR #54 `256eccdd8b866251b67b3c802228d45a5336c852`:
+  - checks — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43717608463)
+  - production — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43717608463)
+  - process — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43717608473)
+  - postgres-audit — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43717608519)
+
+- Актуализация PR #54 относительно main `e1477f8dcf0679eb5a5bde2b888f3f596452cebd`: обычный merge сохранил сценарий повторного чтения после ротации tenant и истечения срока по серверным часам, а также последующие разделы main. Исходный HEAD PR — `708dc1bc0ebc2ed9e1fc4fac62698d7368e85e6e`. Миграция 0025 содержит используемую тестом таблицу `group_memberships`, образ Compose закреплён на PostgreSQL 17.11.
+- Повторить изолированный сценарий командой выше на новом HEAD не удалось: `docker --context desktop-linux info` после разрешённого доступа ответил, но `compose up -d --wait postgres` для проекта `veriq-session-refresh-bd5a2fc5` получил `Docker Desktop is unable to start`; удаление ресурсов этого проекта также не удалось. Миграция и SQL-тест не выполнялись. Ruff и mypy `--strict` для тестового файла прошли локально; CI обновлённого HEAD ожидает публикации. Проверка PostgreSQL и отдельный архитектурный допуск остаются открытыми.
+- После восстановления Docker на HEAD `1080a45525de7b3d2a33a1e5e0196d39d41ea8f2` выполнены команды выше в отдельных Compose-проектах `veriq-session-clarify-caa015e2` и `veriq-session-rework-c0011ae4` с синтетическими данными: `up -d --wait postgres`, `run --build --rm --no-deps -T migrate`, целевой `academic_slice2_session_recheck_checks.py` и `down --volumes`. На мигрированной PostgreSQL 17.11 оба прогона подтвердили неизменную привязку при повторном чтении, отказ прежнему доказательству после ротации A → B, отказ по истечении срока на серверных часах и сохранность состава A/B. `docker ps -a` и `docker volume ls` с фильтром проектов не нашли контейнеров и томов ни у этих стендов, ни у прежнего `veriq-session-refresh-bd5a2fc5`; первоначальная ошибка очистки устранена.
+- CI на опубликованном HEAD `1080a45525de7b3d2a33a1e5e0196d39d41ea8f2`: checks и production — успешно ([44999474178](https://github.com/mironoouv/Veriq/actions/runs/44999474178)), process — успешно ([44999474120](https://github.com/mironoouv/Veriq/actions/runs/44999474120)), postgres-audit — успешно ([44999474220](https://github.com/mironoouv/Veriq/actions/runs/44999474220)). CI следующего HEAD проверяется после публикации. Проверка подтверждает автономную предпосылку TEN-01; рабочая транзакционная авторизация, аудит и полная HTTPS-приёмка TEN-01/AUD-01 остаются открытыми, отдельный архитектурный допуск не получен.
+
 ## Academic & Studio Slice 2 — ACL блокировки аккаунтов
 
 - На PostgreSQL 17.11 в Compose-проекте `veriq-account-lock-7cc88201b` роль `veriq_session_store` прочитала `users.id` и `users.disabled_at` и заблокировала обе синтетические строки через `FOR NO KEY UPDATE NOWAIT`. Миграция 0007 даёт SELECT на эти столбцы. Эффективный UPDATE действует на `credential_version`, `password_hash` и `updated_at` по миграциям 0008, 0010 и 0012. Этого достаточно для блокирующего чтения при отсутствии UPDATE на `disabled_at`. Независимое соединение получило 55P03. Снимки статусов и состава A/B совпали.
