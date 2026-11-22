@@ -8,7 +8,7 @@ from academic_group_teacher_schema_checks import fixture
 from sqlalchemy import Connection, Engine, text
 from veriq.auth_credentials import CredentialVerifier
 from veriq.database import create_database_engine
-from veriq.sessions import Sessions
+from veriq.sessions import Sessions, SessionToken
 
 Binding = tuple[UUID, UUID, int]
 READ = """
@@ -86,12 +86,12 @@ def main() -> None:
     before = roster(owner)
     assert len(before) == 2
 
-    def issue():
+    def issue() -> SessionToken:
         return sessions.issue(
             verifier.confirm(ADMIN, 1, mfa_level=1, organization_id=ORG)
         )
 
-    def proof_for(token):
+    def proof_for(token: SessionToken) -> dict[str, object]:
         gate = token._gate(sessions.policy)
         return {"id": gate.session_id, "digest": gate.digest}
 

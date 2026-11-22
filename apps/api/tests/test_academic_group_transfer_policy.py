@@ -4,12 +4,14 @@ from uuid import UUID
 import pytest
 
 from veriq.academic_group_teacher_policy import Assignment, Caller, Group, Membership
+from veriq.academic_group_transfer_contract import TransferFailure
 from veriq.academic_group_transfer_policy import (
     TRANSFER,
     GroupAccess,
     SourceInterval,
     TeacherAuthority,
     authorize_transfer,
+    classify_transfer,
 )
 from veriq.tenant_access import AccessDenied
 
@@ -36,6 +38,7 @@ SRC, DST = access(SOURCE), access(DESTINATION)
 @pytest.mark.parametrize("caller", [CALLER, TEACHER])
 def test_transfer_allowed(caller: Caller) -> None:
     authorize_transfer(caller, SRC, DST, TARGET, INTERVAL)
+    assert classify_transfer(caller, SRC, DST, TARGET, INTERVAL) is None
 
 
 @pytest.mark.parametrize(
@@ -67,19 +70,79 @@ def test_teacher_needs_current_authority_on_both_groups(
 ) -> None:
     with pytest.raises(AccessDenied):
         authorize_transfer(TEACHER, source, destination, TARGET, INTERVAL)
+    assert (
+        classify_transfer(TEACHER, source, destination, TARGET, INTERVAL)
+        is TransferFailure.RESOURCE_NOT_FOUND
+    )
+
+
+@pytest.mark.parametrize("caller", [CALLER, TEACHER])
+def test_state_conflicts_require_current_access(caller: Caller) -> None:
+    archived = replace(DST, group=replace(DST.group, active=False))
+    assert (
+        classify_transfer(caller, SRC, archived, TARGET, INTERVAL)
+        is TransferFailure.TRANSFER_CONFLICT
+    )
+    assert (
+        classify_transfer(caller, SRC, SRC, TARGET, INTERVAL)
+        is TransferFailure.TRANSFER_CONFLICT
+    )
+    denied = replace(caller, permissions=frozenset())
+    assert (
+        classify_transfer(denied, SRC, archived, TARGET, INTERVAL)
+        is TransferFailure.RESOURCE_NOT_FOUND
+    )
+    closed = replace(INTERVAL, open=False)
+    assert (
+        classify_transfer(caller, SRC, DST, TARGET, closed)
+        is TransferFailure.RESOURCE_NOT_FOUND
+    )
+    assert (
+        classify_transfer(
+            caller, SRC, DST, TARGET, closed, access_previously_confirmed=True
+        )
+        is TransferFailure.TRANSFER_CONFLICT
+    )
+    assert (
+        classify_transfer(
+            denied, SRC, DST, TARGET, closed, access_previously_confirmed=True
+        )
+        is TransferFailure.RESOURCE_NOT_FOUND
+    )
+    assert (
+        classify_transfer(
+            replace(caller, session_current=False), SRC, archived, TARGET, closed
+        )
+        is TransferFailure.SESSION_INVALID
+    )
 
 
 @pytest.mark.parametrize(
-    ("caller", "source", "destination", "student", "interval"),
+    ("caller", "source", "destination", "student", "interval", "expected"),
     [
-        (replace(CALLER, grant_epoch=2), SRC, DST, TARGET, INTERVAL),
-        (replace(CALLER, session_current=False), SRC, DST, TARGET, INTERVAL),
+        (
+            replace(CALLER, grant_epoch=2),
+            SRC,
+            DST,
+            TARGET,
+            INTERVAL,
+            TransferFailure.RESOURCE_NOT_FOUND,
+        ),
+        (
+            replace(CALLER, session_current=False),
+            SRC,
+            DST,
+            TARGET,
+            INTERVAL,
+            TransferFailure.SESSION_INVALID,
+        ),
         (
             replace(CALLER, membership=replace(ADMIN, active=False)),
             SRC,
             DST,
             TARGET,
             INTERVAL,
+            TransferFailure.RESOURCE_NOT_FOUND,
         ),
         (
             CALLER,
@@ -87,6 +150,7 @@ def test_teacher_needs_current_authority_on_both_groups(
             replace(DST, group=Group(B, DESTINATION, True)),
             TARGET,
             INTERVAL,
+            TransferFailure.RESOURCE_NOT_FOUND,
         ),
         (
             CALLER,
@@ -94,13 +158,49 @@ def test_teacher_needs_current_authority_on_both_groups(
             replace(DST, group=Group(A, DESTINATION, False)),
             TARGET,
             INTERVAL,
+            TransferFailure.TRANSFER_CONFLICT,
         ),
-        (CALLER, SRC, DST, replace(TARGET, organization_id=B), INTERVAL),
-        (CALLER, SRC, DST, replace(TARGET, active=False), INTERVAL),
-        (CALLER, SRC, DST, TARGET, replace(INTERVAL, open=False)),
-        (CALLER, SRC, DST, TARGET, replace(INTERVAL, group_id=DESTINATION)),
-        (CALLER, SRC, DST, TARGET, replace(INTERVAL, membership_id=ACTOR)),
-        (CALLER, SRC, SRC, TARGET, INTERVAL),
+        (
+            CALLER,
+            SRC,
+            DST,
+            replace(TARGET, organization_id=B),
+            INTERVAL,
+            TransferFailure.RESOURCE_NOT_FOUND,
+        ),
+        (
+            CALLER,
+            SRC,
+            DST,
+            replace(TARGET, active=False),
+            INTERVAL,
+            TransferFailure.RESOURCE_NOT_FOUND,
+        ),
+        (
+            CALLER,
+            SRC,
+            DST,
+            TARGET,
+            replace(INTERVAL, open=False),
+            TransferFailure.RESOURCE_NOT_FOUND,
+        ),
+        (
+            CALLER,
+            SRC,
+            DST,
+            TARGET,
+            replace(INTERVAL, group_id=DESTINATION),
+            TransferFailure.RESOURCE_NOT_FOUND,
+        ),
+        (
+            CALLER,
+            SRC,
+            DST,
+            TARGET,
+            replace(INTERVAL, membership_id=ACTOR),
+            TransferFailure.RESOURCE_NOT_FOUND,
+        ),
+        (CALLER, SRC, SRC, TARGET, INTERVAL, TransferFailure.TRANSFER_CONFLICT),
     ],
 )
 def test_transfer_rejects_invalid_context(
@@ -109,6 +209,9 @@ def test_transfer_rejects_invalid_context(
     destination: GroupAccess,
     student: Membership,
     interval: SourceInterval,
+    expected: TransferFailure,
 ) -> None:
     with pytest.raises(AccessDenied):
         authorize_transfer(caller, source, destination, student, interval)
+    failure = classify_transfer(caller, source, destination, student, interval)
+    assert failure is expected

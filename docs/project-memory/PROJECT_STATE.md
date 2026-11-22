@@ -181,3 +181,139 @@
   - production — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43717608463)
   - process — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43717608473)
   - postgres-audit — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43717608519)
+
+- Актуализация PR #54 относительно main `e1477f8dcf0679eb5a5bde2b888f3f596452cebd`: обычный merge сохранил сценарий повторного чтения после ротации tenant и истечения срока по серверным часам, а также последующие разделы main. Исходный HEAD PR — `708dc1bc0ebc2ed9e1fc4fac62698d7368e85e6e`. Миграция 0025 содержит используемую тестом таблицу `group_memberships`, образ Compose закреплён на PostgreSQL 17.11; применимость подтверждена чтением схемы, не прогоном.
+- Повторить изолированный сценарий командой выше на новом HEAD не удалось: `docker --context desktop-linux info` после разрешённого доступа ответил, но `compose up -d --wait postgres` для проекта `veriq-session-refresh-bd5a2fc5` получил `Docker Desktop is unable to start`; удаление ресурсов этого проекта также не удалось. Миграция и SQL-тест не выполнялись. Ruff и mypy `--strict` для тестового файла прошли локально; CI обновлённого HEAD ожидает публикации. Проверка PostgreSQL и отдельный архитектурный допуск остаются открытыми.
+
+## Academic & Studio Slice 2 — ACL блокировки аккаунтов
+
+- На PostgreSQL 17.11 в Compose-проекте `veriq-account-lock-7cc88201b` роль `veriq_session_store` прочитала `users.id` и `users.disabled_at` и заблокировала обе синтетические строки через `FOR NO KEY UPDATE NOWAIT`. Миграция 0007 даёт SELECT на эти столбцы. Эффективный UPDATE действует на `credential_version`, `password_hash` и `updated_at` по миграциям 0008, 0010 и 0012. Этого достаточно для блокирующего чтения при отсутствии UPDATE на `disabled_at`. Независимое соединение получило 55P03. Снимки статусов и состава A/B совпали.
+- Для повтора из корня задать разные временные синтетические значения `VERIQ_DB_PASSWORD`, `VERIQ_API_DB_PASSWORD` и `VERIQ_WORKER_DB_PASSWORD`:
+  ```powershell
+  docker --context desktop-linux info
+  $p = 'veriq-account-lock-' + [guid]::NewGuid().ToString('N').Substring(0,8)
+  docker --context desktop-linux compose -p $p up -d --wait postgres
+  docker --context desktop-linux compose -p $p run --build --rm --no-deps -T migrate
+  docker --context desktop-linux compose -p $p run --rm --no-deps -T -e PYTHONPATH=/app -v "${PWD}/tests:/fixtures:ro" migrate python /fixtures/academic_slice2_account_lock_acl_checks.py
+  docker --context desktop-linux compose -p $p down --volumes
+  ```
+- CI на проверенном HEAD PR #55 `12618d68728ba5bc54b7aab44888e912e36d3cac`:
+  - checks — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43734046333)
+  - production — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43734046333)
+  - process — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43734046407)
+  - postgres-audit — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43734046345)
+- Матрица остаётся PROPOSED. Открыты привязка аккаунтов к tenant под FORCE RLS, эффективный EXECUTE будущих помощников, транзакционная авторизация, рабочий аудит и полная приёмка TEN-01/AUD-01 через HTTPS. SEC-MFA-01 — OPEN. Public Auth — NOT READY. Риск прежних полномочий доверенной SQL-роли сохраняется.
+
+## Academic & Studio Slice 2 — FORCE RLS привязки аккаунта
+
+- В профильном плане описаны проектные SELECT-политики для владельца помощника, составное соединение интервала с активным членством, повторная сверка привязки перед блокировкой и восстановление tenant-контекста. Добавлена будущая матрица PostgreSQL TEN-01 для синтетических A/B. Шаг документальный, матрица остаётся PROPOSED. Эффективные EXECUTE и FORCE RLS будущих ролей, транзакционная авторизация, рабочий аудит и полная приёмка TEN-01/AUD-01 через HTTPS остаются открытыми.
+
+- На PostgreSQL 17.11 в Compose-проекте `veriq-binding-8c66b7b0-final` тестовая роль NOLOGIN без BYPASSRLS и владения таблицами получила только указанные столбцовые SELECT. На обеих таблицах подтверждён FORCE RLS. Отсутствующий и пустой контекст скрыли все строки. Установка A или B открыла строки соответствующего tenant. Поиск из A вернул UUID для открытого интервала с активным членством A и пустой результат для чужого, закрытого или неактивного случая. После фиксации изменённой привязки на независимом соединении повторное чтение выявило несовпадение.
+- Для повтора из корня задать разные временные синтетические значения `VERIQ_DB_PASSWORD`, `VERIQ_API_DB_PASSWORD` и `VERIQ_WORKER_DB_PASSWORD`:
+  ```powershell
+  docker --context desktop-linux info
+  $p = 'veriq-binding-' + [guid]::NewGuid().ToString('N').Substring(0,8)
+  docker --context desktop-linux compose -p $p up -d --wait postgres
+  docker --context desktop-linux compose -p $p run --build --rm --no-deps -T migrate
+  docker --context desktop-linux compose -p $p run --rm --no-deps -T -e PYTHONPATH=/app -v "${PWD}/tests:/fixtures:ro" migrate python /fixtures/academic_slice2_account_binding_rls_checks.py
+  docker --context desktop-linux compose -p $p down --volumes
+  ```
+- CI на проверенном HEAD PR #57 `dfff7394b846452ebe10b8f0537efa48ae81e0e0`:
+  - checks — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43740093588)
+  - production — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43740093588)
+  - process — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43740093521)
+  - postgres-audit — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43740093571)
+- Для рабочей команды открыты доверенное происхождение и восстановление tenant-контекста, эффективный EXECUTE, отсутствие чужой блокировки, транзакционная авторизация, рабочий аудит и приёмка TEN-01/AUD-01 через HTTPS.
+
+## Academic & Studio Slice 2 — архитектурная готовность транзакции
+
+- На main a54588bb2f6a503ac3e623cc9dc1fe117e8a0780 профильный план сводит доказательства TEN-01/AUD-01 по схеме, ACL, политике, блокировкам, GUC, EXECUTE, атомарности и HTTP-контракту. Для каждого указаны границы автономного результата и открытые условия рабочей реализации. Проектные разделы остаются PROPOSED.
+- GitHub на 2026-11-22 подтвердил открытые PR #54 (708dc1bc0ebc2ed9e1fc4fac62698d7368e85e6e) и #61 (2fedbd17734dde9e8a9d2ebd3e3886ca6858b784). Их работа не дублируется и не считается частью main. Расхождение CI #61 требует отдельного разрешения, архивирование — отложенного PostgreSQL-прогона после восстановления Docker.
+- Заключение подготовлено для отдельного архитектурного допуска. Рабочая транзакционная авторизация, эффективные права, полный протокол блокировок, рабочий аудит и HTTPS-приёмка остаются открытыми. CI этого документального изменения требует сверки после публикации контроллером. SEC-MFA-01 — OPEN. Public Auth — NOT READY. Риск доверенной SQL-роли сохраняется.
+
+## Academic & Studio Slice 2 — HTTPS-контракт перевода
+
+- Добавлена регрессионная проверка действующей create_app с выключенным и включённым тестовым browser login и включённым каталогом. Синтетические провайдеры соединений позволяют проверить реальный browser_router и сборку без внешних сервисов. Маршрут academic-roster/transfers отсутствует в роутере, приложении и опубликованной тестовой OpenAPI, POST возвращает 404. Health и маршруты каталога служат положительными контролями.
+- В окружении uv sync --frozen прошли 147 целевых pytest, Ruff, mypy --strict и git diff --check. Прежние автономные тесты сохранены. Docker не требовался. CI опубликованного HEAD требует отдельной проверки. Рабочий маршрут остаётся PROPOSED, архитектурные блокеры и полная приёмка TEN-01/AUD-01 открыты.
+
+- Добавлены 24 совместных автономных сценария create_transfer_admission → create_transfer_router → синтетическая команда с classify_transfer. Снимок вызывающего строится из подтверждённой идентичности допуска. Проверены обе роли, передача SessionGate, точные 401/403/404/409 и 201, отказы до вызова команды и отсутствие защищённых данных в ответах. Сессионная граница и снимки синтетические.
+- В окружении uv sync --frozen прошли 145 целевых pytest, Ruff и mypy --strict. Прежние тесты сохранены. git diff --check прошёл. Docker для автономного шага не запускался. Регистрация рабочего маршрута отсутствует. CI нового HEAD требует сверки после публикации. PR #54/#61, архивирование, транзакционная авторизация, права, блокировки, рабочий аудит и HTTPS-приёмка TEN-01/AUD-01 остаются открытыми.
+
+- Добавлены 22 автономных сценария совместной проверки classify_transfer и create_transfer_router для Org Admin и Teacher. Синтетическая команда проверяет действующую чистую политику и возвращает её категорию. Покрыты успех, недействительная сессия, устаревшая эпоха, чужие ссылки, отсутствие разрешения на каждой группе, закрытый источник до/после допуска, архивная цель и приоритет отказа доступа. Ответы не содержат доказательства, UUID актёра/студента и ключ команды.
+- В окружении uv sync --frozen прошёл 121 целевой pytest, включая прежние тесты политики, допуска, HTTP и OpenAPI. Ruff, mypy --strict и git diff --check прошли. Docker для автономных тестов не запускался. Регистрация рабочего маршрута отсутствует. CI опубликованного HEAD требует отдельной сверки. Получение доверенных снимков, транзакционная авторизация, блокировки, права, рабочий аудит и полная HTTPS-приёмка TEN-01/AUD-01 открыты.
+
+- Уточнены отрицательные тесты чистой политики: каждый сценарий явно задаёт ожидаемый TransferFailure вместо допуска любого статуса 401/404/409. Проверка совместимости authorize_transfer через AccessDenied сохранена. В окружении uv sync --frozen прошли 64 целевых pytest, Ruff и mypy --strict. git diff --check прошёл. Docker для модульной правки не запускался. CI нового HEAD требует сверки после публикации контроллером.
+
+- Добавлена чистая classify_transfer с категориями TransferFailure по доверенным снимкам. Проверка текущих полномочий предшествует конфликтам состояния. Закрытый источник скрывается по умолчанию, конфликт после предварительного допуска требует отдельного доверенного серверного признака и сохранения текущих полномочий. authorize_transfer сохраняет прежний интерфейс и отказы.
+- В окружении uv sync --frozen прошли 64 целевых pytest, Ruff и mypy --strict. Docker для чистой политики не запускался. CI опубликованного HEAD требует отдельной сверки. Получение снимков, рабочая транзакционная авторизация, блокировки, права, аудит и HTTPS-приёмка TEN-01/AUD-01 остаются открытыми.
+
+- Изолированный адаптер описывает OpenAPI для обязательного UUID заголовка, тела из двух UUID, минимального ответа 201 и шести кодов отказа с безопасным envelope. Описаны Origin/CSRF и no-store. Автономный тест проверяет сгенерированную схему через /openapi.json, обязательность и точный набор полей.
+- В окружении uv sync --frozen прошли 77 целевых pytest, Ruff и mypy --strict. Существующие проверки HTTP и допуска сохранены. Docker для автономного шага не запускался. Регистрация в рабочем приложении отсутствует. Checks, production, process и postgres-audit опубликованного HEAD требуют отдельной сверки. Рабочие авторизация, права, аудит и полная HTTPS-приёмка TEN-01/AUD-01 открыты.
+
+- Добавлена автономная create_transfer_admission с обязательными Sessions и серверной проверкой Origin/CSRF. Используются SessionToken, SessionGate и Sessions.resolve. Допуск создаётся только для подтверждённого непустого tenant, совпадающего с путём. Тестовая сессионная граница синтетическая, PostgreSQL в этих проверках не используется.
+- В окружении uv sync --frozen прошли 76 целевых pytest, Ruff и mypy --strict. Подтверждены успешный допуск, отказы Origin/CSRF, недействительной сессии, отсутствующего и чужого tenant, отсутствие вызова команды при отказах и скрытие доказательства в ответах. Docker для автономного шага не запускался. Регистрация маршрута отсутствует. CI опубликованного HEAD требует отдельной сверки. Авторизация обеих групп, транзакционная повторная проверка, права, рабочий аудит и HTTPS-приёмка TEN-01/AUD-01 открыты.
+
+- В TransferAdmission вместо одного session_id передаётся обязательный серверный SessionGate с digest и ограничениями сроков для будущей повторной транзакционной проверки. Поле скрыто из repr. Тесты подтверждают передачу того же синтетического доказательства команде, отсутствие его в ответах и представлении и сохранение отказов до вызова команды.
+- В окружении uv sync --frozen прошли 69 целевых pytest, Ruff и mypy --strict. Docker для автономной правки не запускался. CI на новом HEAD требует отдельной проверки после публикации контроллером. Рабочая авторизация, права, аудит и HTTPS-приёмка остаются открытыми.
+
+- Добавлен самостоятельный create_transfer_router с обязательными типизированными зависимостями допуска и команды. Повторно использованы модели, проверка UUID ключа и безопасные отказы. Адаптер генерирует диагностический контекст, сверяет tenant допуска, скрывает исключения зависимостей. Тестовый обработчик заменён адаптером с синтетическими зависимостями. В main.py и browser_login.py регистрация отсутствует.
+- В окружении uv sync --frozen прошли 68 целевых pytest, Ruff, mypy --strict и git diff --check. Подтверждены отсутствие вызова команды при неверном запросе или отказе допуска, передача аргументов и контекста, ответы 201/отказы и маршрутизация. Docker для автономного шага не запускался. Checks, production, process и postgres-audit будущего HEAD требуют сверки после публикации. Рабочая интеграция, Origin/CSRF и сессия, транзакционная авторизация, права, аудит и полная HTTPS-приёмка TEN-01/AUD-01 остаются открытыми.
+
+- Автономный TestClient проверил совместное использование моделей, UUID Idempotency-Key и безопасных ответов. Покрыты точный 201 с no-store, 422 для тела/заголовка, шесть категорий отказов и оба порядка регистрации academic-roster/transfers и academic/{kind}. Обработчики существуют только в тестовом приложении и возвращают синтетические ответы.
+- В локальном окружении, созданном через uv sync --frozen из apps/api/uv.lock, прошли 58 целевых pytest (16 HTTP-сценариев и 42 прежних проверки), Ruff и mypy --strict. Docker для автономных тестов не требовался. Checks, production, process и postgres-audit будущего HEAD требуют сверки после публикации контроллером. Рабочая авторизация, права, аудит и HTTPS-приёмка TEN-01/AUD-01 остаются открытыми.
+
+- Добавлены автономные TransferFailure и transfer_error_response с шестью фиксированными категориями, нейтральным сообщением, диагностическим request_id, пустыми details и no-store. Категоризацию после авторизации должна выполнять будущая команда. Подключение к маршруту остаётся PROPOSED.
+- Локально прошли 42 целевых pytest и mypy --strict. Ruff и git diff --check проверены после правки импортов. Версии инструментов соответствуют uv.lock. Docker для автономного формирования ответов не запускался. Checks, production, process и postgres-audit будущего HEAD требуют сверки после публикации. Рабочая авторизация, права, аудит и HTTPS-приёмка TEN-01/AUD-01 открыты.
+
+- Добавлена автономная parse_transfer_idempotency_key для обязательного UUID заголовка. Отсутствующие, пустые и неверные значения дают нейтральный ValueError без отражения входа. Назначение UUID команды отделено от диагностического request_id. Подключение к маршруту остаётся PROPOSED.
+- Локально прошли 35 целевых pytest, включая прежние проверки моделей, Ruff и mypy --strict. Docker для автономной проверки заголовка не запускался. Checks, production, process и postgres-audit требуют проверки на опубликованном HEAD. Рабочая авторизация, права, аудит и HTTPS-приёмка TEN-01/AUD-01 открыты.
+
+- Добавлены автономные GroupTransferRequest и GroupTransferResult. Запрос требует два UUID и запрещает дополнительные поля. Результат требует фиксированный result=transferred и UUID целевого интервала. Подключение к маршруту остаётся PROPOSED.
+- Локально прошли 28 целевых pytest, Ruff и mypy --strict для двух новых файлов. Проверены положительные значения, обязательность полей, неверные UUID, лишние поля, сериализация и JSON Schema. PostgreSQL и Docker для автономных моделей не требуются. Checks, production, process и postgres-audit будущего HEAD ожидают публикации контроллером.
+
+- PROPOSED. В API_CONTRACTS.md описаны маршрут academic-roster/transfers, два UUID-поля запроса, обязательный Idempotency-Key, минимальный ответ 201 и серверная проверка обеих групп. Закрытый источник при предварительном поиске и повтор после фиксации дают нейтральный HTTP 404. Закрытие после подтверждения доступа даёт 409 при сохранении полномочий. Добавлены будущие проверки маршрутизации и отказов без изменения интервалов и аудита. Определены нейтральные отказы без раскрытия чужих ресурсов и будущие HTTPS-сценарии TEN-01/AUD-01 с проверкой отката через PostgreSQL.
+- Результат документальный. Рабочая команда, транзакционная авторизация, эффективные права, рабочий аудит и полная приёмка открыты. PR #61 требует разрешения расхождения CI. SEC-MFA-01 — OPEN. Public Auth — NOT READY. Риск прежних полномочий доверенной SQL-роли сохраняется.
+
+## Academic & Studio Slice 2 — контракт аудита перевода
+
+- PROPOSED. В профильном плане сопоставлены общая модель audit_events, действующие auth_audit_events и academic_catalog_events. Предложен отдельный типизированный журнал перевода с tenant-ссылками, request ID, актёром, студентом, двумя интервалами и общим серверным временем. Описаны закрытый просмотр, append-only права и будущие проверки повторов, изоляции и отката при отказе аудита.
+- Результат документальный. Рабочий аудит, транзакционная авторизация, эффективные права и полная приёмка TEN-01/AUD-01 через HTTPS открыты. Отложенная проверка архивирования требует отдельного прогона после восстановления Docker. SEC-MFA-01 — OPEN. Public Auth — NOT READY. Риск прежних полномочий доверенной SQL-роли сохраняется.
+
+## Academic & Studio Slice 2 — модель EXECUTE цепочки перевода
+
+- В отдельном Compose-проекте `veriq-execute-dbb2d172` на мигрированной PostgreSQL 17.11 прошла проверка четырёх тестовых SECURITY DEFINER-функций и пяти NOLOGIN-ролей. Проверены эффективные EXECUTE по полным сигнатурам, отсутствие PUBLIC EXECUTE, ожидаемые владельцы и последовательность вложенных переходов команды к сессионному помощнику и помощнику аккаунтов, затем к внутреннему чтению сессии. API-аналог вызывает только команду, worker-аналог получает 42501 для всех функций. Прямые вызовы помощников из неподходящих ролей возвращают 42501. Владельцы сохраняют собственный EXECUTE.
+- Для повтора из корня задать разные временные синтетические значения `VERIQ_DB_PASSWORD`, `VERIQ_API_DB_PASSWORD` и `VERIQ_WORKER_DB_PASSWORD`:
+  ```powershell
+  docker --context desktop-linux info
+  $p = 'veriq-execute-' + [guid]::NewGuid().ToString('N').Substring(0,8)
+  docker --context desktop-linux compose -p $p up -d --wait postgres
+  docker --context desktop-linux compose -p $p run --build --rm --no-deps -T migrate
+  docker --context desktop-linux compose -p $p run --rm --no-deps -T -e PYTHONPATH=/app -v "${PWD}/tests:/fixtures:ro" migrate python /fixtures/academic_slice2_transfer_execute_acl_checks.py
+  docker --context desktop-linux compose -p $p down --volumes
+  ```
+- Проверенный локальный исходный SHA — `9c3ff7510e8d46a82cdd181bc707d1576c2b3403` с правками этого шага.
+- CI на проверенном HEAD PR #59 `1cb77f2c0a36a0b868228ad00c6e0cd64c0b191f`:
+  - checks — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/44880672694)
+  - production — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/44880672694)
+  - process — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/44880672665)
+  - postgres-audit — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/44880672686)
+- Подтверждена модель прав на тестовых функциях, возвращающих синтетические маркеры ролей. Рабочие функции остаются PROPOSED. Открыты их эффективные права, доверенное происхождение и восстановление tenant-контекста, отсутствие чужой блокировки, транзакционная авторизация, рабочий аудит и HTTPS-приёмка TEN-01/AUD-01. SEC-MFA-01 — OPEN. Public Auth — NOT READY. Риск прежних полномочий доверенной SQL-роли сохраняется.
+
+## Academic & Studio Slice 2 — восстановление tenant-контекста
+
+- PostgreSQL 17.11, Compose-проект `veriq-context-7f0df431`, база мигрирована из `14fd4ab2f6ea439a41896370602528f47bc779ec`. Тестовый вызывающий подставляет доверенный tenant A. Функциональный SET очистил входной GUC, а локальный A открыл под FORCE RLS только строки состава и членства A. В той же транзакции исходные B и пустой GUC восстановились после возврата и после SQLSTATE P7501 с откатом до точки сохранения.
+- Для повтора из корня задать разные временные синтетические значения `VERIQ_DB_PASSWORD`, `VERIQ_API_DB_PASSWORD` и `VERIQ_WORKER_DB_PASSWORD`:
+  ```powershell
+  docker --context desktop-linux info
+  $p = 'veriq-context-' + [guid]::NewGuid().ToString('N').Substring(0,8)
+  docker --context desktop-linux compose -p $p up -d --wait postgres
+  docker --context desktop-linux compose -p $p run --build --rm --no-deps -T migrate
+  docker --context desktop-linux compose -p $p run --rm --no-deps -T -e PYTHONPATH=/app -v "${PWD}/tests:/fixtures:ro" migrate python /fixtures/academic_slice2_tenant_context_checks.py
+  docker --context desktop-linux compose -p $p down --volumes
+  ```
+- CI на проверенном HEAD PR #58 `d4299b3c96b22e3ac9a738952c069abaf040cd66`:
+  - checks — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43742562510)
+  - production — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43742562510)
+  - process — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43742562570)
+  - postgres-audit — успешно. [GitHub Actions](https://github.com/mironoouv/Veriq/actions/runs/43742562580)
+- Рабочий помощник остаётся PROPOSED. Открыты доверенное происхождение и восстановление tenant в рабочем помощнике, эффективный EXECUTE, отсутствие чужой блокировки, транзакционная авторизация, рабочий аудит и полная HTTPS-приёмка TEN-01/AUD-01.
